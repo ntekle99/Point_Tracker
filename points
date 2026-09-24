@@ -24,6 +24,18 @@ case "$cmd" in
     load_env
     "$PY" src/autohunt.py "$@" ;;
 
+  stream)
+    # decoupled render (producer) -> judge (consumers) via Kafka.
+    # requires a broker:  docker compose up -d
+    load_env
+    "$PY" src/stream_pipeline.py "$@" ;;
+
+  watch)
+    # continuous poll -> real-time alert on newly-appeared flat offers.
+    # requires a broker:  docker compose up -d
+    load_env
+    "$PY" src/stream_watch.py "$@" ;;
+
   run)
     # full daily pipeline: scrape -> hunt -> report + notify
     load_env
@@ -43,11 +55,13 @@ usage: ./points <command>
 
   login    sign into Capital One once (saves your session)
   scan     scrape all offers + score, no pricing (fast)
-  hunt     price opportunities via render + LLM  (flags pass through, e.g. --workers 6)
+  hunt     price opportunities via render + LLM (ProcessPool)
+  stream   same, but decoupled via Kafka producer/consumer (needs: docker compose up -d)
+  watch    continuous poll -> real-time alert on new flat offers (needs: docker compose up -d)
   run      full daily pipeline: scrape -> hunt -> report + macOS notification
   report   print today's report
 
-Setup: cp .env.example .env  then add your NVIDIA_API_KEY.
+Setup: echo "NVIDIA_API_KEY=your-key" > .env
 Card:  Venture X only (for now).
 EOF
     ;;

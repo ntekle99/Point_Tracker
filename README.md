@@ -90,3 +90,38 @@ pts_per_min  = net_points ÷ estimated_effort_minutes
 ```
 
 and flags a deal as worth-it when `pts_per_min` clears your bar (default **200/min ≈ $120/hr** in miles value, tunable in `config.yaml`). Deals are split into **clean** (buy & keep / cancelable), **service commitments** (fiber/TV/contract), and a **verify** bucket for implausibly-high auto reads.
+
+## Streaming mode (Kafka)
+
+Two Kafka-backed pipelines decouple the stages so rendering, LLM analysis, and
+alerting scale and fail independently. Start a broker first:
+
+```bash
+docker compose up -d          # single-node Kafka (KRaft), localhost:9092
+```
+
+**Decoupled pricing** — producer renders pages in parallel and publishes each to
+`points.pages`; a consumer group of LLM judges reads them and emits verdicts to
+`points.verdicts`; a collector applies the guardrails and writes the report:
+
+```bash
+./points stream --consumers 4 --render-workers 6
+```
+
+**Continuous + real-time alerts** — a watcher keeps one logged-in session open,
+re-polls the feed every N minutes, and publishes only *newly-appeared* offers to
+`points.new_offers`; an alerter consumer fires an instant macOS notification the
+moment a new flat deal shows up:
+
+```bash
+./points watch --interval 30 --alerters 1
+```
+
+```
+                       ┌── judge consumers ──▶ points.verdicts ──▶ collector ──▶ report
+ producer ▶ points.pages
+                       
+ watcher  ▶ points.new_offers ──▶ alerter consumer ──▶ 🔔 notification
+```
+
+Streaming source files live in `src/stream_*.py`; topic config in `src/stream_bus.py`.
