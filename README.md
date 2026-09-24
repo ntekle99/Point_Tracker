@@ -125,3 +125,20 @@ moment a new flat deal shows up:
 ```
 
 Streaming source files live in `src/stream_*.py`; topic config in `src/stream_bus.py`.
+
+### Phone alerts (ntfy)
+
+By default the alerter fires a **macOS notification** (local dev). For an
+always-on deployment (e.g. a cloud VM), get the alert on your **phone** via
+[ntfy.sh](https://ntfy.sh) — free, no account:
+
+1. Install the **ntfy** app (iOS/Android) and subscribe to a unique topic, e.g.
+   `points-<yourname>-<random>`.
+2. Add it to your `.env`:
+   ```bash
+   echo "NTFY_TOPIC=points-<yourname>-<random>" >> .env
+   ```
+
+Now every new flat deal pushes to your phone (`🎯 New Capital One flat offer —
+Pinter · 10,500 miles`), tappable straight to the offers feed. On a Linux VM the
+macOS notification is skipped automatically and the phone push carries it.
