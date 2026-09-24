@@ -1,5 +1,10 @@
 # Point Tracker
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Playwright](https://img.shields.io/badge/Playwright-headless%20Chromium-2EAD33?logo=playwright&logoColor=white)
+![Kafka](https://img.shields.io/badge/Apache%20Kafka-streaming-231F20?logo=apachekafka&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-blue)
+
 **An autonomous agent that finds arbitrage in Capital One credit-card reward offers** — where a flat miles bonus is worth more than the cheapest qualifying purchase — and ranks the finds by return on your time.
 
 Some Capital One Offers pay a **flat** miles bonus (e.g. *"7,000 miles for shopping at X"*) regardless of how much you spend. If a merchant sells a cheap in-stock item, the miles can be worth far more than the item costs. This tool hunts those out of **1,000+ daily offers**, prices each merchant live, and tells you exactly what to buy.
@@ -40,23 +45,28 @@ Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-com
 
 ```
 .
-├── points                 # single CLI entry point
-├── config.yaml            # thresholds, mile valuation, time value
-├── hunt_urls.json         # per-merchant price-page overrides
+├── points                      # single CLI entry point (login/scan/hunt/stream/watch/run)
 ├── requirements.txt
-├── src/                   # the pipeline
-│   ├── scrape.py          #   feed-API scraper (auth, pagination, tier detail, cache)
-│   ├── parse.py           #   reward/tier classification (flat vs multiplier vs capped)
-│   ├── pricecheck.py      #   headless-browser price + product-link extractor
-│   ├── judge.py           #   LLM: cheapest qualifying purchase + plausibility + effort
-│   ├── score.py           #   ranking, pts/min, buckets, report rendering
-│   └── autohunt.py        #   orchestrator (parallel render → judge → score)
+├── docker-compose.yml          # single-node Kafka (KRaft) for streaming mode
+├── config/
+│   ├── config.yaml             # thresholds, mile valuation, your hourly rate
+│   └── hunt_urls.json          # per-merchant price-page overrides
+├── src/                        # the pipeline
+│   ├── scrape.py               #   feed-API scraper (auth, pagination, tier detail, cache)
+│   ├── parse.py                #   reward/tier classification (flat / multiplier / capped)
+│   ├── pricecheck.py           #   headless-browser price + product-link extractor
+│   ├── judge.py                #   LLM: cheapest qualifying purchase + plausibility + effort
+│   ├── score.py                #   ranking (net pts/min), buckets, report rendering
+│   ├── autohunt.py             #   orchestrator (parallel render → judge → score)
+│   └── stream_*.py             #   Kafka: producer, consumers, watcher, alerter, bus
 ├── scripts/
-│   └── clean_auto.py      # maintenance: drop auto finds to re-validate
+│   ├── clean_auto.py           # maintenance: drop auto finds to re-validate
+│   └── vm_selfcheck.py         # deployment self-check (ntfy + kafka)
 ├── deploy/
-│   └── points-tracker.plist   # macOS launch agent (daily run)
+│   ├── points-tracker.plist    # macOS launch agent (daily run)
+│   └── points-watch.service    # systemd unit (24/7 watcher on a Linux VM)
 └── docs/
-    └── RUN.md             # per-run playbook
+    └── RUN.md                  # per-run playbook
 ```
 
 ## Usage
@@ -142,3 +152,23 @@ always-on deployment (e.g. a cloud VM), get the alert on your **phone** via
 Now every new flat deal pushes to your phone (`🎯 New Capital One flat offer —
 Pinter · 10,500 miles`), tappable straight to the offers feed. On a Linux VM the
 macOS notification is skipped automatically and the phone push carries it.
+
+### Deploy 24/7 (Linux VM)
+
+Run the watcher continuously on a small always-on box so alerts reach your phone
+even with your laptop closed:
+
+```bash
+git clone https://github.com/ntekle99/Point_Tracker.git && cd Point_Tracker
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/playwright install chromium && sudo .venv/bin/playwright install-deps chromium
+docker compose up -d                        # Kafka (restarts on reboot)
+printf 'NVIDIA_API_KEY=...\nNTFY_TOPIC=...\n' > .env
+# install the watcher as a systemd service (starts on boot, auto-restarts):
+sudo cp deploy/points-watch.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now points-watch
+```
+
+`journalctl -u points-watch -f` to follow it. The Capital One session is refreshed
+periodically from a trusted machine (`./points login` → copy `pw_profile/`), since
+a bank login can't be fully automated.
