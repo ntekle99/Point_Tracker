@@ -30,10 +30,10 @@ import pricecheck
 import score as S
 import judge as J
 
-HERE = Path(__file__).resolve().parent
-DATA = HERE / "data"
-FINDS = HERE / "finds.json"
-URLMAP = HERE / "hunt_urls.json"   # optional {domain: best-price-page-url}
+ROOT = Path(__file__).resolve().parent.parent   # repo root (src/ is one level down)
+DATA = ROOT / "data"
+FINDS = ROOT / "finds.json"
+URLMAP = ROOT / "hunt_urls.json"   # optional {domain: best-price-page-url}
 
 
 def latest_offers() -> Path | None:
@@ -82,7 +82,7 @@ def main(argv) -> int:
     if not offers_path or not offers_path.exists():
         print("no offers file — run scrape.py first", file=sys.stderr)
         return 1
-    cfg = S.load_config(HERE / "config.yaml")
+    cfg = S.load_config(ROOT / "config.yaml")
     finds = S.load_finds(FINDS)
     urlmap = json.loads(URLMAP.read_text()) if URLMAP.exists() else {}
     payload = json.loads(offers_path.read_text())
@@ -142,7 +142,8 @@ def main(argv) -> int:
                 "item": verdict.get("item", ""),
                 "price": round(float(price), 2),
                 "in_stock": True,
-                "url": url,
+                "url": verdict.get("product_url") or url,   # exact product link if found
+                "page_url": url,                            # the page we rendered
                 "purchase_type": verdict.get("purchase_type", "none"),
                 "effort_minutes": verdict.get("effort_minutes"),
                 "note": f"[auto] {verdict.get('note','')} (confidence: {verdict.get('confidence')})",
@@ -190,7 +191,7 @@ def main(argv) -> int:
 
     # re-score with the freshly-priced opportunities
     report, winners = S.build_report(offers, cfg, offers_path.name, S.load_finds(FINDS))
-    rep = HERE / "reports" / f"report_{dt.date.today().isoformat()}.md"
+    rep = ROOT / "reports" / f"report_{dt.date.today().isoformat()}.md"
     rep.parent.mkdir(exist_ok=True)
     rep.write_text(report)
     print(f"report -> {rep}")

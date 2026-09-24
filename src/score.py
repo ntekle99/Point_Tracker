@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent   # repo root (src/ is one level down)
+
 
 # ---- config loading (tiny YAML subset, no dependency) ----------------------
 
@@ -34,6 +36,10 @@ DEFAULTS = {
     "show_multiplier_offers": False,
     "time_value_per_hour": 50.0,
     "min_points_per_minute": 200.0,
+    # Auto-judged (LLM) deals above this ratio are almost always a misread price
+    # (a $0.71 topper, a $1 order). They get pulled into a "verify" bucket rather
+    # than shown as clean deals. Hand-verified finds are exempt.
+    "max_auto_ratio": 12.0,
 }
 
 # Fallback effort (minutes to complete the purchase) by purchase type, used when
@@ -158,6 +164,26 @@ _SERVICE_DOMAINS = ("t-mobile", "att.com", "attwireless", "boostmobile", "cricke
 _SERVICE_TERMS = ("new line", "add a line", "activation", "new customer",
                   "subscription", "monthly", "first box", "first order", "sign up",
                   "new service", "plan", "membership", "trial", "per month")
+
+
+# Carriers where "buying a plan" actually needs a compatible phone + activation.
+_PREPAID_PHONE = ("attwireless", "att.com", "t-mobile", "postpaid", "boostmobile",
+                  "cricketwireless", "metrobyt", "visible.com", "mintmobile",
+                  "consumercellular", "straighttalk", "totalwireless")
+
+
+def deal_caveat(opp: dict) -> str:
+    """A short buyer-beware note for deals whose 'cheap price' hides real
+    prerequisites (a phone, new-customer rules, a hold period)."""
+    dom = (opp.get("domain") or "").lower()
+    ptype = opp.get("purchase_type", "")
+    if any(k in dom for k in _PREPAID_PHONE):
+        return ("needs a spare unlocked phone (BYOD) + must be a NEW customer + "
+                "miles post ~45 days after the first bill clears, then cancel")
+    if ptype == "subscription":
+        return ("new customers only; miles post after the 1st bill clears "
+                "(~45 days), then cancel/don't renew")
+    return ""
 
 
 def barrier_kind(o: dict) -> str:
@@ -287,9 +313,17 @@ def build_report(offers: list[dict], cfg: dict, source: str,
 
     # split clean deals (buy & keep / cancel anytime) from service commitments,
     # and rank by RETURN ON YOUR TIME (net points per minute of effort).
-    clean = sorted([x for x in winners if x.get("purchase_type") != "service_commitment"],
-                   key=lambda x: -x.get("points_per_min", 0))
+    non_commit = [x for x in winners if x.get("purchase_type") != "service_commitment"]
     commit = [x for x in winners if x.get("purchase_type") == "service_commitment"]
+    # deterministic backstop: auto-judged deals with an implausibly high ratio are
+    # almost always a misread price — quarantine them for manual verification.
+    cap = cfg["max_auto_ratio"]
+    suspicious = sorted([x for x in non_commit
+                         if x.get("auto") and x.get("ratio", 0) > cap],
+                        key=lambda x: -x.get("ratio", 0))
+    clean = sorted([x for x in non_commit
+                    if not (x.get("auto") and x.get("ratio", 0) > cap)],
+                   key=lambda x: -x.get("points_per_min", 0))
     ppm_bar = cfg["min_points_per_minute"]
 
     # 🏆 single best recommendation by points-per-minute. Prefer a HAND-VERIFIED
@@ -301,6 +335,7 @@ def build_report(offers: list[dict], cfg: dict, source: str,
         kind = {"one_time_good": "one-time buy", "subscription": "1-month, then cancel"}.get(
             top.get("purchase_type"), "")
         worth = "✅ clears" if top.get("points_per_min", 0) >= ppm_bar else "⚠️ below"
+        top_cav = deal_caveat(top)
         L += [f"## 🏆 Top pick: {top['merchant']} — "
               f"{int(top.get('points_per_min',0)):,} pts/min", "",
               f"**Buy:** {link} — **${top['cost_usd']:.2f}**"
@@ -310,14 +345,17 @@ def build_report(offers: list[dict], cfg: dict, source: str,
               f"**Effort:** ~{top.get('effort_min',0):.0f} min → "
               f"**{int(top.get('points_per_min',0)):,} net pts/min** "
               f"({worth} your {ppm_bar:.0f}/min bar) · ${top.get('net_after_time_usd',0):.0f} "
-              f"net after your time",
-              f"_How: open the **{top['merchant']}** offer in your Capital One portal → "
+              f"net after your time"]
+        if top_cav:
+            L += [f"**⚠️ Catch:** {top_cav}"]
+        L += [f"_How: open the **{top['merchant']}** offer in your Capital One portal → "
               f"click **Shop Online** → buy the item above on the merchant site._", ""]
 
     if clean:
         L += [f"## ✅ {len(clean)} clean deal(s), ranked by return on your time", "",
-              "| ✓ | Merchant | Item | Type | Cost | Miles | Ratio | Effort | **Net pts/min** | Worth it? |",
+              "| ✓ | Merchant | Item | Type | Cost | Miles | Ratio | Effort | **Net pts/min** | Catch |",
               "|:--:|---|---|---|--:|--:|--:|--:|--:|:--:|"]
+        cav_notes = []
         for x in clean:
             item = x.get("item") or "—"
             if x.get("item_url"):
@@ -325,19 +363,37 @@ def build_report(offers: list[dict], cfg: dict, source: str,
             ptype = {"one_time_good": "one-time", "subscription": "sub (cancel)"}.get(
                 x.get("purchase_type"), "—")
             ppm = int(x.get("points_per_min", 0))
-            ok = "✅" if ppm >= ppm_bar else "—"
             src = "🤖" if x.get("auto") else "✓"      # 🤖 = auto-judged, verify; ✓ = hand-verified
+            cav = deal_caveat(x)
+            catch = "⚠️" if cav else ("✅" if ppm >= ppm_bar else "—")
+            if cav:
+                cav_notes.append(f"- **{x['merchant']}** — ⚠️ {cav}")
             L.append(f"| {src} | [{x['merchant']}]({x.get('url','')}) | {item} | {ptype} "
                      f"| ${x['cost_usd']:.2f} | {int(x['reward_miles']):,} "
                      f"| {x['ratio']:.1f}x | ~{x.get('effort_min',0):.0f}m "
-                     f"| **{ppm:,}** | {ok} |")
+                     f"| **{ppm:,}** | {catch} |")
         L += ["", "_✓ = price hand-verified · 🤖 = auto-judged by the LLM (sanity-check "
-              "before buying — it can misread prices)._",
-              "", f"_Net pts/min = miles earned minus cost (in points), per minute "
+              "before buying) · ⚠️ = has a catch (see below)._"]
+        if cav_notes:
+            L += ["", "**⚠️ Catches — read before buying these:**"] + cav_notes
+        L += ["", f"_Net pts/min = miles earned minus cost (in points), per minute "
               f"of effort. Your bar: **{ppm_bar:.0f}/min** (≈ your "
-              f"${cfg['time_value_per_hour']:.0f}/hr). ✅ = worth your time._", ""]
+              f"${cfg['time_value_per_hour']:.0f}/hr)._", ""]
     else:
         L += ["## ✅ No clean deals cleared the threshold today", ""]
+
+    if suspicious:
+        L += [f"## ⚠️ {len(suspicious)} too-good-to-be-true — VERIFY the price yourself",
+              "", f"_Auto-judged at over {cap:.0f}x — almost always a misread "
+              "(a page fragment, a per-unit price, a '$X off'). Open the link and "
+              "confirm the real cheapest price before trusting these._", "",
+              "| Merchant | Item | Claimed cost | Miles | Claimed ratio | Link |",
+              "|---|---|--:|--:|--:|---|"]
+        for x in suspicious:
+            L.append(f"| {x['merchant']} | {x.get('item','')} | ${x['cost_usd']:.2f} "
+                     f"| {int(x['reward_miles']):,} | {x['ratio']:.1f}x "
+                     f"| [{x.get('domain','')}]({x.get('item_url') or x.get('url','')}) |")
+        L.append("")
 
     if commit:
         L += [f"<details><summary>⚠️ {len(commit)} high-ratio but require a service "
@@ -409,8 +465,8 @@ def notify(winners: list[dict], cfg: dict) -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Score scraped points offers.")
     ap.add_argument("offers_json", type=Path)
-    ap.add_argument("--config", type=Path, default=Path("config.yaml"))
-    ap.add_argument("--finds", type=Path, default=Path("finds.json"),
+    ap.add_argument("--config", type=Path, default=ROOT / "config.yaml")
+    ap.add_argument("--finds", type=Path, default=ROOT / "finds.json",
                     help="Stage B named-item results keyed by domain")
     ap.add_argument("--no-notify", action="store_true")
     ap.add_argument("--out", type=Path, default=None,

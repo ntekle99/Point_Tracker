@@ -50,7 +50,8 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
             except Exception:
                 pass
             page.wait_for_timeout(wait_ms)
-            # collect price tokens with surrounding text for context
+            # collect price tokens with surrounding text AND the nearest product
+            # link, so we can deep-link the exact item (not the homepage).
             items = page.evaluate(r"""
               () => {
                 const re = /\$\s?\d{1,4}(?:\.\d{2})?/;
@@ -66,20 +67,36 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
                   for (let i=0;i<3 && el;i++){ const c=(el.innerText||'').trim();
                     if (c && c.length<=200){ ctx=c; el=el.parentElement; } else break; }
                   if (seen.has(ctx)) continue; seen.add(ctx);
-                  out.push(ctx.replace(/\s+/g,' '));
+                  // nearest product link: a link wrapping the price, else one in
+                  // the surrounding card (skip nav/cart/account/social links).
+                  let url = '';
+                  const bad = /(cart|account|login|sign[- ]?in|help|support|privacy|terms|facebook|instagram|twitter|tiktok|youtube|#$)/i;
+                  let a = n.parentElement ? n.parentElement.closest('a[href]') : null;
+                  if (!a) {
+                    let c = n.parentElement;
+                    for (let i=0;i<4 && c && !a;i++){
+                      const links = c.querySelectorAll ? c.querySelectorAll('a[href]') : [];
+                      for (const l of links){ if (l.href && !bad.test(l.href)){ a=l; break; } }
+                      c = c.parentElement;
+                    }
+                  }
+                  if (a && a.href && !bad.test(a.href)) url = a.href;
+                  out.push({text: ctx.replace(/\s+/g,' '), url});
                 }
                 return out.slice(0, 60);
               }
             """)
             prices = []
-            for ctx_txt in items:
+            for it in items:
+                ctx_txt, purl = it.get("text", ""), it.get("url", "")
                 for m in PRICE_RE.finditer(ctx_txt):
-                    prices.append({"amount": _to_float(m.group(1)), "context": ctx_txt[:140]})
-            # dedupe + sort ascending
+                    prices.append({"amount": _to_float(m.group(1)),
+                                   "context": ctx_txt[:140], "url": purl})
+            # dedupe (keep first url) + sort ascending
             uniq = {}
             for p in prices:
                 key = (p["amount"], p["context"])
-                uniq[key] = p
+                uniq.setdefault(key, p)
             info["prices"] = sorted(uniq.values(), key=lambda p: p["amount"])
             info["ok"] = bool(info["prices"])
             if not info["prices"]:

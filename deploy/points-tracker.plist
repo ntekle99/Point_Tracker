@@ -1,26 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launch agent: runs the daily pipeline every morning at 8:00 AM.
+  Install:
+    cp deploy/points-tracker.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/points-tracker.plist
+  Edit the paths below to match where you cloned the repo.
+-->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ntekle.points-tracker</string>
+    <string>com.pointstracker.daily</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/ntekle/Desktop/points_tracker/daily.sh</string>
+        <string>/Users/ntekle/Desktop/points_tracker/points</string>
+        <string>run</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>/Users/ntekle/Desktop/points_tracker</string>
 
-    <!-- Run every day at 8:00 AM -->
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Hour</key>
-        <integer>8</integer>
-        <key>Minute</key>
-        <integer>0</integer>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>0</integer>
     </dict>
 
     <key>StandardOutPath</key>
@@ -28,8 +33,6 @@
     <key>StandardErrorPath</key>
     <string>/Users/ntekle/Desktop/points_tracker/data/daily.log</string>
 
-    <!-- if the Mac was asleep at 8am, run once it wakes -->
-    <key>RunAtLoad</key>
-    <false/>
+    <key>RunAtLoad</key><false/>
 </dict>
 </plist>

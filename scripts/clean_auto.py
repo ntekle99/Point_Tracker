@@ -7,7 +7,7 @@ autohunt.py, to re-validate everything the old loose judge produced.
 import json
 from pathlib import Path
 
-F = Path(__file__).resolve().parent / "finds.json"
+F = Path(__file__).resolve().parent.parent / "finds.json"   # repo root (scripts/ is one down)
 d = json.loads(F.read_text())
 kept, removed = {}, []
 for k, v in d.items():

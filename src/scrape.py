@@ -40,9 +40,9 @@ from playwright.sync_api import sync_playwright
 
 import parse as P
 
-HERE = Path(__file__).resolve().parent
-PROFILE_DIR = HERE / "pw_profile"
-DATA_DIR = HERE / "data"
+ROOT = Path(__file__).resolve().parent.parent   # repo root (src/ is one level down)
+PROFILE_DIR = ROOT / "pw_profile"
+DATA_DIR = ROOT / "data"
 FEED_URL = "https://capitaloneoffers.com/feed"
 
 # --- Anti-ban rate limiting (be a good citizen; don't get throttled) ---------

@@ -12,22 +12,23 @@ cmd="${1:-help}"; shift || true
 case "$cmd" in
   login)
     # one-time Capital One sign-in (saves the session to pw_profile/)
-    "$PY" scrape.py --login ;;
+    "$PY" src/scrape.py --login ;;
 
   scan)
     # scrape all offers + score, no per-merchant pricing (fast)
-    "$PY" scrape.py
-    "$PY" score.py "$(latest_offers)" ;;
+    "$PY" src/scrape.py
+    "$PY" src/score.py "$(latest_offers)" ;;
 
   hunt)
     # price unpriced opportunities via render + LLM judge (passes flags through)
     load_env
-    "$PY" autohunt.py "$@" ;;
+    "$PY" src/autohunt.py "$@" ;;
 
   run)
     # full daily pipeline: scrape -> hunt -> report + notify
     load_env
-    ./daily.sh ;;
+    "$PY" src/scrape.py
+    "$PY" src/autohunt.py ;;
 
   report)
     # print the latest report

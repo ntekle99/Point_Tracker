@@ -36,8 +36,20 @@ def _client() -> OpenAI:
 _SYSTEM = (
     "You evaluate Capital One Shopping miles offers. Given a merchant offer and a "
     "list of prices scraped from that merchant's live site (each with the text "
-    "around it), find the SINGLE CHEAPEST purchase a shopper could make that would "
-    "plausibly QUALIFY for the offer's category. Ignore prices that are NOT real "
+    "around it), find the price of the purchase that EARNS THIS OFFER'S REWARD.\n"
+    "CATEGORY MATCHING IS MANDATORY. The miles are earned ONLY by buying the "
+    "product that matches the offer's category. If the category names a specific "
+    "tier or product ('Unlimited Bundles', 'Prepaid', 'Internet 2 Gig', "
+    "'Add A Line'), you MUST price THAT specific product — never substitute a "
+    "cheaper, different product. Example: a Disney+ 'Unlimited Bundles' tier is "
+    "earned by the expensive Disney+/Hulu/ESPN Unlimited bundle (~$26+), NOT the "
+    "cheap $8 basic plan (which earns a different, smaller tier). If you cannot "
+    "find the price of the product that actually matches the category, return "
+    "price_usd=null and likely_qualifies=false — do NOT pair this reward with an "
+    "unrelated cheaper price. Only when the category is 'Any purchase' may you "
+    "pick the cheapest item on the site.\n"
+    "Once you've identified the matching product, find its SINGLE CHEAPEST real "
+    "price. Ignore prices that are NOT real "
     "qualifying purchases: overage/usage fees (e.g. '$10/1GB'), regulatory/recovery "
     "charges, per-day roaming add-ons, warranty/insurance add-ons, accessory-line "
     "add-ons, device financing, and taxes. Prefer a genuine one-time purchase or "
@@ -65,9 +77,12 @@ _SYSTEM = (
     "new-customer signup (create account, enter payment, activate) that you must "
     "later remember to cancel ≈ 12-20. Anything needing an install visit, "
     "contract, or credit check ≈ 60+.\n"
+    "PRODUCT LINK — for the item you pick, set 'product_url' to the URL shown on "
+    "that price's line, copied EXACTLY. If that line's URL is '(none)' or you "
+    "can't tell, use an empty string. Never invent or guess a URL.\n"
     "Be conservative and honest; never invent a price not supported by the context. "
     "Reply with ONLY a JSON object of exactly this shape and nothing else: "
-    '{"item": string, "price_usd": number or null, '
+    '{"item": string, "price_usd": number or null, "product_url": string, '
     '"purchase_type": "one_time_good" or "subscription" or "service_commitment" or "none", '
     '"plausible": boolean, "effort_minutes": number, '
     '"likely_qualifies": boolean, "confidence": "low" or "medium" or "high", '
@@ -80,7 +95,8 @@ def judge(offer: dict, rendered: dict) -> dict:
     find_prices() output {prices:[{amount, context}], ...}."""
     prices = rendered.get("prices") or []
     price_lines = "\n".join(
-        f"- ${p['amount']:.2f}  |  {p['context']}" for p in prices[:40]
+        f"- ${p['amount']:.2f}  |  {p['context']}  |  URL: {p.get('url','') or '(none)'}"
+        for p in prices[:40]
     ) or "(no prices found on the page)"
 
     user = (
@@ -116,6 +132,7 @@ def judge(offer: dict, rendered: dict) -> dict:
 
     data.setdefault("item", "")
     data.setdefault("price_usd", None)
+    data.setdefault("product_url", "")
     data.setdefault("purchase_type", "none")
     data.setdefault("plausible", False)
     data.setdefault("effort_minutes", None)

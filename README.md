@@ -1,94 +1,105 @@
-# points_tracker
+# Point Tracker
 
-Finds Capital One Offers (Venture X) where a **fixed miles reward** beats the
-cost of the cheapest qualifying purchase by at least **2x** — the "spend $8, get
-7,000 miles" arbitrage.
+**An autonomous agent that finds arbitrage in Capital One credit-card reward offers** — where a flat miles bonus is worth more than the cheapest qualifying purchase — and ranks the finds by return on your time.
 
-## The one idea that makes this work
-- **Flat lump-sum offers** ("7,000 miles for shopping at X") net positive when a
-  cheap qualifying purchase exists. These are the target.
-- **Multiplier offers** ("14X miles per $1") never do — you always spend more
-  than the miles are worth. These are filtered out.
+Some Capital One Offers pay a **flat** miles bonus (e.g. *"7,000 miles for shopping at X"*) regardless of how much you spend. If a merchant sells a cheap in-stock item, the miles can be worth far more than the item costs. This tool hunts those out of **1,000+ daily offers**, prices each merchant live, and tells you exactly what to buy.
 
-## Mile valuation (Venture X)
-- `1.0¢`/mile — conservative floor (cash/statement credit)
-- `~1.85¢`/mile — best case via transfer partners
+> Built for the Capital One **Venture X**. Personal project; see [Disclaimer](#disclaimer).
 
-Both are shown in the report. Tune in `config.yaml`.
+---
 
-## How to run (Playwright — self-contained, no extension)
-Runs its own Chromium with a persistent login profile, so it sidesteps the
-NVIDIA-managed-Chrome extension block. Credentials never touch this code.
+## What it does
 
-**First time — log in once (saved to `pw_profile/`):**
-```bash
-./run.sh --login
 ```
-A browser opens; sign into Capital One, reach your Offers feed, press Enter.
-
-**Every day after — one command scrapes + scores + notifies:**
-```bash
-./run.sh
-```
-Writes `data/offers_<date>.json` (+ `raw_<date>.json`) and
-`reports/report_<date>.md`, and fires a macOS notification if any offer
-clears your ratio.
-
-Score any scraped file directly:
-```bash
-.venv/bin/python score.py data/offers_sample.json
+scrape ─▶ expand tiers ─▶ render each merchant ─▶ LLM judge ─▶ score ─▶ report
 ```
 
-### Alternate path: agent-driven (Claude in Chrome)
-If run on a **non-managed** Chrome profile with the Claude extension installed,
-say **"check points deals"** and the agent drives your live session instead —
-see `RUN.md`. Blocked on NVIDIA-managed Chrome, which is why Playwright is the
-default here.
+1. **Scrape** every offer from Capital One's feed API (authenticated, paginated, rate-limited, cached).
+2. **Expand tiers** — a *"Up to 11,200 miles"* offer is really a menu; flat sub-tiers (e.g. *"Prepaid → 7,800 miles"*) are where the cheap plays hide.
+3. **Render** each candidate merchant's live site with a headless browser (many sites render prices in JavaScript that static scrapers can't see).
+4. **Judge** — an LLM reads the rendered prices and picks the *cheapest qualifying* purchase, classifies the friction (one-time buy / cancelable sub / service commitment), estimates effort, and returns a plausibility check.
+5. **Score** — ranks every deal by **net points per minute of effort** against a configurable hourly-rate bar, separates verified deals from LLM guesses, and quarantines implausible reads.
+6. **Report** — a ranked markdown report + macOS notification, with a 🏆 top pick, exact product links, and a ⚠️ "catch" column (new-customer rules, hold periods, "needs a spare phone", etc.).
 
-## The full daily flow
-1. **Scrape + score** (you run this):
-   ```bash
-   cd ~/Desktop/points_tracker && ./run.sh
-   ```
-   Captures the Capital One **feed API** (reliable: real merchant names, domains,
-   reward headlines), classifies every offer, and scores flat ones against
-   `finds.json`. Writes `reports/report_<date>.md` + a notification.
+Runs itself daily via a macOS launch agent.
 
-2. **Find the item — Stage B** (ask the agent): for each flat offer that has no
-   entry in `finds.json` yet, the agent visits the merchant's store, finds the
-   **cheapest in-stock qualifying item**, and writes it into `finds.json`. Then
-   re-run `./run.sh` (or `score.py`) and the report names the exact item + true
-   ratio. Say: *"find items for today's flat offers."*
+## Highlights
 
-3. **Verify + buy** (you): open the offer in your portal, confirm it's any-purchase
-   / no-minimum / not new-customer-only, check the item's still in stock, buy it.
+- **Reliable data via the private feed API** — reverse-engineered pagination + per-offer detail endpoints instead of brittle DOM scraping.
+- **JS-rendering price finder** — a headless-browser step reads prices that `requests`/WebFetch can't.
+- **LLM-in-the-loop with guardrails** — plausibility gating, a confidence floor, a deterministic max-ratio backstop, category-to-product matching, and a hand-verified-vs-auto split. (The judge is genuinely useful *and* genuinely fallible; the tool is designed around that.)
+- **Return-on-time ranking** — deals scored in *net points per minute*, not just raw ratio, against your hourly rate.
+- **Parallel** — merchant pricing runs across a process pool.
+- **Anti-ban** — domain-keyed cache, pacing, hard caps, and 429 back-off.
 
-### Offer types (only one nets positive)
-- **flat** — "10,500 miles" for any purchase → the target (Pinter).
-- **capped** — "Up to 12,000 miles" → a tiered menu; the flat tiers usually need
-  a service signup (phone line, subscription). Excluded.
-- **multiplier** — "14X miles" → scales with spend, never wins. Excluded.
+## Tech stack
 
-## Files
-| File | Role |
-|---|---|
-| `run.sh` | One command: scrape → score (`--login` for first-time sign-in) |
-| `scrape.py` | Playwright scraper, persistent login profile |
-| `parse.py` | Pure text→offer parsing (regex), `python parse.py` self-tests |
-| `score.py` | Deterministic scoring + report + notification (no deps) |
-| `config.yaml` | Thresholds and mile valuation |
-| `offers.schema.json` | Shape of the scraped offers JSON |
-| `RUN.md` | Playbook for the alternate agent-driven (Chrome extension) path |
-| `data/` | Scraped offers + raw dumps (dated) |
-| `reports/` | Dated markdown reports |
-| `.venv/`, `pw_profile/` | Python env and saved browser session (not committed) |
+Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-compatible LLM API (runs on any endpoint — configured here for an internal inference hub) · macOS `launchd`.
 
-## Reality check
-- The portal needs your login; there's no public API. Scraping drives your own
-  Chrome session — no credentials are stored.
-- Terms are the whole game: minimum spend, new-customer-only, one-time, expiry.
-- Items can be **sold out** (they were for Pinter). "Deal exists" ≠ "purchasable".
-- Capital One can **claw back** offers it considers gamed. Your risk.
-- v1 does **not** auto-purchase.
-# Point_Tracker
-# Point_Tracker
+---
+
+## Project structure
+
+```
+.
+├── points                 # single CLI entry point
+├── config.yaml            # thresholds, mile valuation, time value
+├── hunt_urls.json         # per-merchant price-page overrides
+├── requirements.txt
+├── src/                   # the pipeline
+│   ├── scrape.py          #   feed-API scraper (auth, pagination, tier detail, cache)
+│   ├── parse.py           #   reward/tier classification (flat vs multiplier vs capped)
+│   ├── pricecheck.py      #   headless-browser price + product-link extractor
+│   ├── judge.py           #   LLM: cheapest qualifying purchase + plausibility + effort
+│   ├── score.py           #   ranking, pts/min, buckets, report rendering
+│   └── autohunt.py        #   orchestrator (parallel render → judge → score)
+├── scripts/
+│   └── clean_auto.py      # maintenance: drop auto finds to re-validate
+├── deploy/
+│   └── points-tracker.plist   # macOS launch agent (daily run)
+└── docs/
+    └── RUN.md             # per-run playbook
+```
+
+## Usage
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
+cp .env.example .env          # add your LLM API key
+
+./points login                # one-time: sign into Capital One (session saved locally)
+./points scan                 # scrape offers + score (fast, no pricing)
+./points hunt --workers 6     # price opportunities (render + LLM)
+./points run                  # full pipeline: scrape → hunt → report + notify
+./points report               # print the latest report
+```
+
+Schedule the daily run by editing the paths in `deploy/points-tracker.plist`, then:
+```bash
+cp deploy/points-tracker.plist ~/Library/LaunchAgents/ && \
+launchctl load ~/Library/LaunchAgents/points-tracker.plist
+```
+
+## How ranking works
+
+For each flat opportunity the tool computes:
+
+```
+net_points   = miles_earned − (item_cost ÷ mile_value)
+pts_per_min  = net_points ÷ estimated_effort_minutes
+```
+
+and flags a deal as worth-it when `pts_per_min` clears your bar (default **200/min ≈ $120/hr** in miles value, tunable in `config.yaml`). Deals are split into **clean** (buy & keep / cancelable), **service commitments** (fiber/TV/contract), and a **verify** bucket for implausibly-high auto reads.
+
+## Honest limitations
+
+This is an autonomous scrape + LLM pipeline, so it's a **lead generator, not an oracle**:
+
+- Offers rotate constantly — data is only as fresh as the last scrape.
+- The LLM occasionally misreads a price (a page fragment, a per-unit rate) — mitigated by guardrails, not eliminated. **Hand-verified (`✓`) deals are the trustworthy core; auto (`🤖`) deals are leads to sanity-check in the live portal.**
+- Product deep-links depend on the merchant's page structure.
+
+## Disclaimer
+
+A personal finance-optimization project. Reward programs can **claw back** offers they consider gamed — that's the user's risk. No credentials are stored in the repo; the tool drives your own logged-in browser session (git-ignored). Not affiliated with Capital One.
