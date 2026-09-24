@@ -1,0 +1,31 @@
+# systemd service: run the continuous watcher 24/7 (Linux VM).
+#
+# Install (once the Capital One session is on the VM):
+#   sudo cp deploy/points-watch.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now points-watch
+#
+# Manage:
+#   systemctl status points-watch
+#   journalctl -u points-watch -f          # or: tail -f data/watch.log
+#   sudo systemctl restart points-watch
+#
+# Edit User/paths if you didn't clone to /home/ubuntu/Point_Tracker.
+[Unit]
+Description=Point Tracker — continuous Capital One deal watcher
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Point_Tracker
+ExecStart=/home/ubuntu/Point_Tracker/points watch --interval 30 --alerters 1
+Restart=always
+RestartSec=60
+StandardOutput=append:/home/ubuntu/Point_Tracker/data/watch.log
+StandardError=append:/home/ubuntu/Point_Tracker/data/watch.log
+
+[Install]
+WantedBy=multi-user.target
