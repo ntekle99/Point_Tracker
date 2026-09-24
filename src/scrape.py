@@ -2,8 +2,8 @@
 """
 Capital One Offers scraper (Playwright, persistent login profile).
 
-Because the portal is behind your login and NVIDIA policy blocks the Chrome
-extension, this drives its OWN Chromium with a persistent user-data dir. You
+Because the portal is behind your login (and a browser extension isn't an
+option here), this drives its OWN Chromium with a persistent user-data dir. You
 log in ONCE (manually); the session cookie is saved to ./pw_profile and reused
 on every later run — no credentials ever touch this code.
 

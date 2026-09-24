@@ -61,7 +61,7 @@ usage: ./points <command>
   run      full daily pipeline: scrape -> hunt -> report + macOS notification
   report   print today's report
 
-Setup: echo "NVIDIA_API_KEY=your-key" > .env
+Setup: echo "MODEL_API_KEY=your-key" > .env
 Card:  Venture X only (for now).
 EOF
     ;;

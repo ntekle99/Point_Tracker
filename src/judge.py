@@ -6,10 +6,10 @@ prices+context, ask an LLM to pick the single cheapest QUALIFYING purchase.
 This is what a min() can't do — it distinguishes a $10/mo plan from a $10/1GB
 overage fee, a $5 SIM from a $5/day roaming pass, etc.
 
-Backend: NVIDIA's OpenAI-compatible inference hub (configurable). Reads:
-  NVIDIA_API_KEY         (or OPENAI_API_KEY)   — the key; never stored/printed here
+Backend: any OpenAI-compatible chat endpoint (configurable). Reads:
+  MODEL_API_KEY          (or OPENAI_API_KEY)   — the key; never stored/printed here
   POINTS_JUDGE_BASE_URL  default https://inference-api.nvidia.com/v1/
-  POINTS_JUDGE_MODEL     default nvcf/meta/llama-3.1-70b-instruct
+  POINTS_JUDGE_MODEL     default nvidia/meta/eccn-llama-3.3-70b-instruct
 
 Returns:
   {item, price_usd (float|None), one_time_purchase (bool), likely_qualifies (bool),
@@ -27,9 +27,9 @@ MODEL = os.environ.get("POINTS_JUDGE_MODEL", "nvidia/meta/eccn-llama-3.3-70b-ins
 
 
 def _client() -> OpenAI:
-    key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    key = os.environ.get("MODEL_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not key:
-        raise RuntimeError("set NVIDIA_API_KEY (or OPENAI_API_KEY) in the environment")
+        raise RuntimeError("set MODEL_API_KEY (or OPENAI_API_KEY) in the environment")
     return OpenAI(base_url=BASE_URL, api_key=key)
 
 

@@ -74,7 +74,7 @@ Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-com
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium
-echo "NVIDIA_API_KEY=your-llm-api-key" > .env   # any OpenAI-compatible endpoint
+echo "MODEL_API_KEY=your-llm-api-key" > .env   # any OpenAI-compatible endpoint
 
 # ./points is the CLI — one command, several subcommands:
 ./points login                # one-time: sign into Capital One (session saved locally)
@@ -163,7 +163,7 @@ git clone https://github.com/ntekle99/Point_Tracker.git && cd Point_Tracker
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/playwright install chromium && sudo .venv/bin/playwright install-deps chromium
 docker compose up -d                        # Kafka (restarts on reboot)
-printf 'NVIDIA_API_KEY=...\nNTFY_TOPIC=...\n' > .env
+printf 'MODEL_API_KEY=...\nNTFY_TOPIC=...\n' > .env
 # install the watcher as a systemd service (starts on boot, auto-restarts):
 sudo cp deploy/points-watch.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now points-watch

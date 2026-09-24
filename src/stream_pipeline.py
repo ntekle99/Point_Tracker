@@ -9,7 +9,7 @@ Decouples rendering from analysis with Kafka:
   • writes finds.json + the report.
 
 Requires a broker: `docker compose up -d` (see docker-compose.yml).
-Reads the LLM key from the environment (NVIDIA_API_KEY), inherited by consumers.
+Reads the LLM key from the environment (MODEL_API_KEY), inherited by consumers.
 """
 from __future__ import annotations
 
