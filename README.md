@@ -4,8 +4,6 @@
 
 Some Capital One Offers pay a **flat** miles bonus (e.g. *"7,000 miles for shopping at X"*) regardless of how much you spend. If a merchant sells a cheap in-stock item, the miles can be worth far more than the item costs. This tool hunts those out of **1,000+ daily offers**, prices each merchant live, and tells you exactly what to buy.
 
-> Built for the Capital One **Venture X**. Personal project; see [Disclaimer](#disclaimer).
-
 ---
 
 ## What it does
