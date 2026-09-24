@@ -66,8 +66,9 @@ Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-com
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium
-cp .env.example .env          # add your LLM API key
+echo "NVIDIA_API_KEY=your-llm-api-key" > .env   # any OpenAI-compatible endpoint
 
+# ./points is the CLI — one command, several subcommands:
 ./points login                # one-time: sign into Capital One (session saved locally)
 ./points scan                 # scrape offers + score (fast, no pricing)
 ./points hunt --workers 6     # price opportunities (render + LLM)
