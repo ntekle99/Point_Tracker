@@ -465,7 +465,7 @@ def notify(winners: list[dict], cfg: dict) -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Score scraped points offers.")
     ap.add_argument("offers_json", type=Path)
-    ap.add_argument("--config", type=Path, default=ROOT / "config.yaml")
+    ap.add_argument("--config", type=Path, default=ROOT / "config" / "config.yaml")
     ap.add_argument("--finds", type=Path, default=ROOT / "finds.json",
                     help="Stage B named-item results keyed by domain")
     ap.add_argument("--no-notify", action="store_true")

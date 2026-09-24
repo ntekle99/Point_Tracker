@@ -33,7 +33,7 @@ import judge as J
 ROOT = Path(__file__).resolve().parent.parent   # repo root (src/ is one level down)
 DATA = ROOT / "data"
 FINDS = ROOT / "finds.json"
-URLMAP = ROOT / "hunt_urls.json"   # optional {domain: best-price-page-url}
+URLMAP = ROOT / "config" / "hunt_urls.json"   # optional {domain: best-price-page-url}
 
 
 def latest_offers() -> Path | None:
@@ -82,7 +82,7 @@ def main(argv) -> int:
     if not offers_path or not offers_path.exists():
         print("no offers file — run scrape.py first", file=sys.stderr)
         return 1
-    cfg = S.load_config(ROOT / "config.yaml")
+    cfg = S.load_config(ROOT / "config" / "config.yaml")
     finds = S.load_finds(FINDS)
     urlmap = json.loads(URLMAP.read_text()) if URLMAP.exists() else {}
     payload = json.loads(offers_path.read_text())
