@@ -1,0 +1,23 @@
+# --- SECRETS / SESSION — never commit ---
+# .env = NVIDIA API key
+.env
+# pw_profile = Capital One logged-in browser session (bank cookies!)
+pw_profile/
+
+# --- personal / generated data ---
+# scraped offers, tier cache, logs, account tail in terms
+data/
+# dated deal reports
+reports/
+# evolving priced-deals state
+finds.json
+checked_none.json
+
+# --- python / env ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- os ---
+.DS_Store
+*.log

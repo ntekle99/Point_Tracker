@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# points — Capital One Venture X deal hunter (single entry point).
+# Supports the Venture X card only for now.
+set -euo pipefail
+cd "$(dirname "$0")"
+PY=".venv/bin/python"
+
+load_env() { if [[ -f .env ]]; then set -a; source .env; set +a; fi; }
+latest_offers() { ls -t data/offers_2*.json 2>/dev/null | head -1; }
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  login)
+    # one-time Capital One sign-in (saves the session to pw_profile/)
+    "$PY" scrape.py --login ;;
+
+  scan)
+    # scrape all offers + score, no per-merchant pricing (fast)
+    "$PY" scrape.py
+    "$PY" score.py "$(latest_offers)" ;;
+
+  hunt)
+    # price unpriced opportunities via render + LLM judge (passes flags through)
+    load_env
+    "$PY" autohunt.py "$@" ;;
+
+  run)
+    # full daily pipeline: scrape -> hunt -> report + notify
+    load_env
+    ./daily.sh ;;
+
+  report)
+    # print the latest report
+    r="$(ls -t reports/report_*.md 2>/dev/null | head -1)"
+    [[ -n "$r" ]] && cat "$r" || echo "no report yet — run: ./points run" ;;
+
+  *)
+    cat <<'EOF'
+points — Capital One Venture X deal hunter
+
+usage: ./points <command>
+
+  login    sign into Capital One once (saves your session)
+  scan     scrape all offers + score, no pricing (fast)
+  hunt     price opportunities via render + LLM  (flags pass through, e.g. --workers 6)
+  run      full daily pipeline: scrape -> hunt -> report + macOS notification
+  report   print today's report
+
+Setup: cp .env.example .env  then add your NVIDIA_API_KEY.
+Card:  Venture X only (for now).
+EOF
+    ;;
+esac

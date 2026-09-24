@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Scraped Capital One offers",
+  "description": "Shape the agent writes after scraping the portal; score.py reads this.",
+  "type": "object",
+  "properties": {
+    "scraped_at": { "type": "string", "description": "ISO timestamp" },
+    "offers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["merchant", "reward_type", "reward_miles"],
+        "properties": {
+          "merchant": { "type": "string" },
+          "reward_type": { "enum": ["flat", "multiplier"] },
+          "reward_miles": {
+            "type": "number",
+            "description": "flat: total miles awarded; multiplier: miles per $1"
+          },
+          "min_spend_usd": {
+            "type": ["number", "null"],
+            "description": "minimum qualifying spend from terms; null if not stated"
+          },
+          "url": { "type": "string" },
+          "terms": { "type": "string", "description": "raw fine-print text" }
+        }
+      }
+    }
+  },
+  "required": ["offers"]
+}

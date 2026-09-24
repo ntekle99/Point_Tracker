@@ -1,0 +1,33 @@
+# Points arbitrage config — Venture X
+
+# What one mile is worth, in cents. Two references:
+#   1.0  = conservative (statement credit / cash-out floor)
+#   1.85 = aspirational (transfer-partner sweet spots)
+# The engine scores with `mile_value_cents` and ALSO shows the aspirational
+# number so you can see best-case.
+mile_value_cents: 1.0
+mile_value_aspirational_cents: 1.85
+
+# Minimum value-to-cost ratio to count as a "deal".
+# 2.0 means: $10 spent must return >= $20 in miles value.
+min_ratio: 2.0
+
+# Ignore flat rewards smaller than this many miles (noise filter).
+min_flat_reward_miles: 1000
+
+# When an offer's minimum spend is unknown, assume this floor cost (dollars)
+# for a rough ranking. The report will flag it as NEEDS-CONFIRM.
+assumed_floor_cost_usd: 8.0
+
+# Multiplier offers (e.g. "5X miles") essentially never net positive.
+# Keep false to hide them entirely; set true to list them at the bottom.
+show_multiplier_offers: false
+
+# --- Value of your time ---
+# Your hourly rate. Each minute of effort "costs" this much, so a deal must
+# earn more than that per minute to be worth doing.
+time_value_per_hour: 50
+# Minimum net POINTS earned per minute of effort for a deal to count as a
+# "worth-your-time" win. 200 pts/min ≈ $2/min ≈ $120/hr in miles value.
+# (Fallback effort-by-type estimates live in score.py: EFFORT_MINUTES.)
+min_points_per_minute: 200
