@@ -50,7 +50,7 @@ FEED_URL = "https://capitaloneoffers.com/feed"
 # only fetch merchants we've never seen.
 DETAIL_DELAY_SEC = 2.5     # pause between per-offer detail calls (very gentle)
 PAGE_DELAY_SEC = 1.0       # pause between feed pagination requests
-MAX_DETAILS = 40           # hard cap on NEW detail calls per run
+MAX_DETAILS = 15           # hard cap on NEW detail calls per run (capped offers are few)
 DETAILS_CACHE = DATA_DIR / "details_cache.json"   # keyed by merchant domain; reused across days
 
 # Best-effort DOM extractor. Selectors on this portal are not documented, so we
@@ -291,10 +291,16 @@ def run(login_only: bool, headless: bool, url: str) -> int:
                 cache = {}
         if token:
             def worth_detail(it):
+                # ONLY "capped" (Up to X) offers need the per-offer detail call —
+                # it's the only way to see their hidden flat sub-tiers (e.g. AT&T
+                # Prepaid 7,800). Flat offers already carry their reward in the
+                # feed list, and multipliers never qualify — so neither needs a
+                # detail call. This keeps detail traffic to a handful/day and
+                # avoids throttling the offers/<id> endpoint.
                 bt = (it.get("buttonText") or "")
                 rt, _ = P.classify_reward(bt, it.get("text", "") or "")
-                return rt in ("flat", "capped")
-            # candidates = (domain, id) for flat/capped offers not yet cached
+                return rt == "capped"
+            # candidates = (domain, id) for CAPPED offers not yet cached
             todo, seen_dom = [], set()
             for it in feed_items:
                 dom = (it.get("merchantTLD") or "").lower()
