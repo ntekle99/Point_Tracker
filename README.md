@@ -90,15 +90,3 @@ pts_per_min  = net_points ÷ estimated_effort_minutes
 ```
 
 and flags a deal as worth-it when `pts_per_min` clears your bar (default **200/min ≈ $120/hr** in miles value, tunable in `config.yaml`). Deals are split into **clean** (buy & keep / cancelable), **service commitments** (fiber/TV/contract), and a **verify** bucket for implausibly-high auto reads.
-
-## Honest limitations
-
-This is an autonomous scrape + LLM pipeline, so it's a **lead generator, not an oracle**:
-
-- Offers rotate constantly — data is only as fresh as the last scrape.
-- The LLM occasionally misreads a price (a page fragment, a per-unit rate) — mitigated by guardrails, not eliminated. **Hand-verified (`✓`) deals are the trustworthy core; auto (`🤖`) deals are leads to sanity-check in the live portal.**
-- Product deep-links depend on the merchant's page structure.
-
-## Disclaimer
-
-A personal finance-optimization project. Reward programs can **claw back** offers they consider gamed — that's the user's risk. No credentials are stored in the repo; the tool drives your own logged-in browser session (git-ignored). Not affiliated with Capital One.
