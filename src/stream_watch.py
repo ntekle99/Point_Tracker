@@ -85,7 +85,7 @@ def fetch_all_offers(page, feed_url: str) -> list[dict]:
     return offers
 
 
-def run_watch(interval_min: int, alerters: int) -> int:
+def run_watch(interval_min: int, alerters: int, once: bool = False) -> int:
     DATA.mkdir(exist_ok=True)
     seen = set(json.loads(SEEN_PATH.read_text())) if SEEN_PATH.exists() else set()
     first_run = not seen
@@ -158,6 +158,8 @@ def run_watch(interval_min: int, alerters: int) -> int:
                                          key=(o.get("domain") or "").encode(),
                                          value=json.dumps(o).encode())
                     producer.flush(10)
+                if once:
+                    break
                 time.sleep(max(interval_min, 1) * 60)
         except KeyboardInterrupt:
             print("\nstopping watcher...", flush=True)
@@ -177,8 +179,9 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--interval", type=int, default=30, help="minutes between polls")
     ap.add_argument("--alerters", type=int, default=1)
+    ap.add_argument("--once", action="store_true", help="poll once and exit (cron-friendly)")
     args = ap.parse_args(argv)
-    return run_watch(args.interval, args.alerters)
+    return run_watch(args.interval, args.alerters, args.once)
 
 
 if __name__ == "__main__":

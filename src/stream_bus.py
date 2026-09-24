@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
+BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "127.0.0.1:9092")
 TOPIC_PAGES = "points.pages"
 TOPIC_VERDICTS = "points.verdicts"
 TOPIC_NEW_OFFERS = "points.new_offers"   # continuous watcher -> real-time alerter
