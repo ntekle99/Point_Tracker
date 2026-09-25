@@ -65,7 +65,7 @@ def _phone_push(title: str, body: str, click_url: str | None = None) -> bool:
         req = urllib.request.Request(
             f"{NTFY_SERVER.rstrip('/')}/{NTFY_TOPIC}",
             data=body.encode("utf-8"), method="POST",
-            headers={"Title": ascii_title, "Priority": "high",
+            headers={"Title": ascii_title, "Priority": "urgent",
                      "Tags": "money_with_wings",
                      # tapping the push opens the exact product (or the feed)
                      "Click": click_url or "https://capitaloneoffers.com/feed"})
