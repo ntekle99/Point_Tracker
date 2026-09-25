@@ -24,8 +24,8 @@ from pathlib import Path
 
 from confluent_kafka import Consumer, Producer
 
+import agent_graph
 import judge as J
-import pricecheck
 import stream_bus as bus
 from autohunt import merchant_url
 
@@ -64,11 +64,11 @@ def run_pricer(bootstrap: str = bus.BOOTSTRAP) -> None:
                 cand = json.loads(msg.value())
                 offer, opp = cand["offer"], cand["opp"]
                 url = merchant_url(opp["domain"], urlmap)
-                rendered = pricecheck.find_prices(url, sort_cheapest=True)
-                if rendered.get("blocked"):
-                    verdict = J._fail(f"blocked/throttled: {rendered.get('note','')}")
-                else:
-                    verdict = J.judge(opp, rendered)
+                # run the offer through the LangGraph decision graph
+                # (gate -> price -> judge -> decide); Kafka already distributed it here.
+                state = agent_graph.run_deal(offer, opp, url)
+                verdict = state.get("verdict") or J._fail(
+                    f"gate rejected: {state.get('gate_reason', '')}")
                 # carry the classifier's purchase_type unless the judge found a truer one
                 verdict.setdefault("purchase_type", cand.get("purchase_type", "one_time_good"))
             except Exception as e:
