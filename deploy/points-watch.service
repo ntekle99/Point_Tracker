@@ -21,6 +21,8 @@ Requires=docker.service
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/Point_Tracker
+# ensure the log dir exists (data/ is gitignored, so absent on a fresh clone)
+ExecStartPre=/bin/mkdir -p /home/ubuntu/Point_Tracker/data
 ExecStart=/home/ubuntu/Point_Tracker/points watch --interval 30 --alerters 1
 Restart=always
 RestartSec=60
