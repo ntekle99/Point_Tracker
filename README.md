@@ -134,6 +134,32 @@ moment a new flat deal shows up:
  watcher  ▶ points.new_offers ──▶ alerter consumer ──▶ 🔔 notification
 ```
 
+**Two-stage pipeline (chained queues)** — separates *finding flat, single-purchase
+offers* from *pricing* them, so each scales and fails independently:
+
+```bash
+./points stream2 --classifiers 2 --pricers 2
+```
+
+```
+ feed ▶ points.offers ─▶ [classifiers] ─▶ points.candidates ─▶ [pricers] ─▶ points.rated ─▶ collector
+                          flat-only +                          plain-site render →
+                          single-purchase gate                 cheapest item + deep link + rating
+```
+
+- **Classifiers** keep only offers with a *flat* reward that can be earned by a
+  **single one-time purchase** — deciding from *how the reward is earned* (the tier's
+  category + terms), never the merchant's name (a store called "…Insurance" with an
+  *Any purchase* reward stays in). A fast heuristic drops obvious commitments; an
+  LLM confirms the rest.
+- **Candidates are keyed by domain**, so every candidate for a merchant lands on one
+  partition → one pricer → same-merchant renders never run concurrently (per-domain
+  rate-limit safety on top of the process-wide pacing in `pricecheck`).
+- **Pricers** visit the merchant's *normal* site (decoupled — the feed carries no
+  affiliate link), sort the catalog cheapest-first, and pick the cheapest qualifying
+  item. The report ends with a **🔗 Deep links** section (exact product URLs, click-
+  verified for the top picks).
+
 Streaming source files live in `src/stream_*.py`; topic config in `src/stream_bus.py`.
 
 ### Phone alerts (ntfy)

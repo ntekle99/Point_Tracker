@@ -247,6 +247,65 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500,
         return info
 
 
+def resolve_deep_link(page_url: str, item_hint: str, headless: bool = True,
+                      referer: str | None = None) -> dict:
+    """Best-effort EXACT deep link for one product: load the catalog page ONCE
+    (paced, stealth), find the tile whose text contains `item_hint`, click it, and
+    return where it lands. Used only for the handful of top picks — never in bulk.
+
+    Returns {url|None, ok, blocked, note}. Callers fall back to the nearest-link
+    already captured by find_prices() when ok is False.
+    """
+    out = {"url": None, "ok": False, "blocked": False, "note": ""}
+    hint = (item_hint or "").strip()
+    if not hint:
+        out["note"] = "no item hint"
+        return out
+    _pace()
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"])
+        ctx = browser.new_context(user_agent=_UA, locale="en-US",
+                                  viewport={"width": 1440, "height": 1000},
+                                  extra_http_headers=_EXTRA_HEADERS)
+        ctx.add_init_script(_STEALTH_JS)
+        page = ctx.new_page()
+        try:
+            resp = page.goto(page_url, wait_until="domcontentloaded", timeout=30000,
+                             referer=referer)
+            status = resp.status if resp else 0
+            try:
+                head_text = page.inner_text("body")[:400]
+            except Exception:
+                head_text = ""
+            if _looks_blocked(status, head_text):
+                out["blocked"] = True
+                out["note"] = f"bot-block (HTTP {status}) — not retrying"
+                return out
+            page.wait_for_timeout(1500)
+            _gentle_scroll(page, steps=4)
+            if sort_cheapest := True:
+                _try_sort_low_to_high(page)
+                _gentle_scroll(page, steps=3)
+            # match on a distinctive fragment of the hint (first ~5 words)
+            frag = " ".join(hint.split()[:5])
+            loc = page.get_by_text(frag, exact=False).first
+            loc.scroll_into_view_if_needed(timeout=5000)
+            loc.click(timeout=6000)
+            page.wait_for_timeout(3000)
+            landed = page.url
+            if landed and landed.rstrip("/#") != page_url.rstrip("/#"):
+                out["url"], out["ok"] = landed, True
+            else:
+                out["note"] = "click did not navigate to a distinct product URL"
+        except Exception as e:
+            out["note"] = f"resolve error: {str(e)[:120]}"
+        finally:
+            ctx.close(); browser.close()
+        return out
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("url")

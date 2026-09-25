@@ -30,6 +30,12 @@ case "$cmd" in
     load_env
     "$PY" src/stream_pipeline.py "$@" ;;
 
+  stream2)
+    # two-stage pipeline: feed -> classify (flat + single-purchase) -> price -> rate.
+    # requires a broker:  docker compose up -d  (run ./points scan first for offers)
+    load_env
+    "$PY" src/stream_pipeline2.py "$@" ;;
+
   watch)
     # continuous poll -> real-time alert on newly-appeared flat offers.
     # requires a broker:  docker compose up -d
@@ -57,6 +63,7 @@ usage: ./points <command>
   scan     scrape all offers + score, no pricing (fast)
   hunt     price opportunities via render + LLM (ProcessPool)
   stream   same, but decoupled via Kafka producer/consumer (needs: docker compose up -d)
+  stream2  two-stage Kafka: feed -> flat+single-purchase filter -> price -> rate (needs: docker compose up -d)
   watch    continuous poll -> real-time alert on new flat offers (needs: docker compose up -d)
   run      full daily pipeline: scrape -> hunt -> report + macOS notification
   report   print today's report

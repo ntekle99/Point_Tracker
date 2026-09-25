@@ -148,6 +148,67 @@ def _fail(msg: str) -> dict:
             "likely_qualifies": False, "confidence": "low", "note": msg}
 
 
+_GATE_SYSTEM = (
+    "You classify how a Capital One miles offer's reward is EARNED, from the "
+    "offer metadata ALONE (no live prices). Decide whether a shopper can earn "
+    "this reward with a single ONE-TIME purchase, or whether earning it REQUIRES "
+    "an ongoing subscription or a service commitment.\n"
+    "Judge by the REWARD REQUIREMENT (the category to buy in + the terms), NOT by "
+    "the merchant's name. A store called 'Jack's Insurance' whose reward is 'Any "
+    "purchase' is one_time_good, because you can buy a cheap non-insurance item. "
+    "Only classify as subscription/service_commitment when EARNING THE REWARD "
+    "itself needs it.\n"
+    "  one_time_good      = a single physical/one-time purchase earns it (a SIM, "
+    "an accessory, a book, any 'any purchase' offer).\n"
+    "  subscription       = earning it needs a recurring plan you could pay one "
+    "month then cancel (a streaming month, a prepaid phone month).\n"
+    "  service_commitment = earning it needs installation, a contract, credit "
+    "check, a new phone line, or a long commitment (fiber, TV, solar, insurance "
+    "policy, postpaid line).\n"
+    "Reply with ONLY this JSON: "
+    '{"purchase_type": "one_time_good" | "subscription" | "service_commitment", '
+    '"confidence": "low" | "medium" | "high", "note": string}'
+)
+
+
+def classify_purchase_type(offer_meta: dict) -> dict:
+    """Metadata-only gate (no site visit, no prices). offer_meta needs merchant,
+    category, and any terms. Returns {purchase_type, confidence, note}."""
+    user = (
+        f"OFFER\n"
+        f"  merchant: {offer_meta.get('merchant')}\n"
+        f"  category to buy in: {offer_meta.get('category')}\n"
+        f"  reward: {int(offer_meta.get('reward_miles', 0))} miles\n"
+        f"  terms: {(offer_meta.get('terms') or '')[:600]}\n"
+        f"  detail terms: {(offer_meta.get('detail_terms') or '')[:600]}\n\n"
+        f"Can this reward be earned with a single one-time purchase? JSON only."
+    )
+    try:
+        resp = _client().chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "system", "content": _GATE_SYSTEM},
+                      {"role": "user", "content": user}],
+            temperature=0.0,
+            max_tokens=200,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return {"purchase_type": "unknown", "confidence": "low",
+                "note": f"api error: {str(e)[:120]}"}
+    if "```" in text:
+        text = text.split("```")[1].lstrip("json").strip()
+    try:
+        start, end = text.index("{"), text.rindex("}") + 1
+        data = json.loads(text[start:end])
+    except Exception:
+        return {"purchase_type": "unknown", "confidence": "low",
+                "note": f"parse failed: {text[:100]}"}
+    data.setdefault("purchase_type", "unknown")
+    data.setdefault("confidence", "low")
+    data.setdefault("note", "")
+    return data
+
+
 if __name__ == "__main__":
     demo_offer = {"merchant": "Boost Mobile", "domain": "boostmobile.com",
                   "category": "Any purchase", "reward_miles": 7200}

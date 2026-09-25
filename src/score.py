@@ -436,6 +436,23 @@ def build_report(offers: list[dict], cfg: dict, source: str,
                      f"| [{x['domain']}]({x.get('url','')}) |")
         L.append("")
 
+    # DEEP LINKS — every priced deal with a positive value, exact product link
+    # first (✓ verified via click, otherwise the nearest catalog link). This is the
+    # "deep links for everything" hand-off: copy/paste straight to the item.
+    deep = [x for x in (clean + commit + marginal) if x.get("cost_usd")]
+    deep.sort(key=lambda x: -x.get("points_per_min", 0) if x.get("points_per_min") else 0)
+    if deep:
+        L += ["## 🔗 Deep links (buy these exact items)", ""]
+        for x in deep:
+            find = find_for(x["domain"], x["category"], finds) or {}
+            verified = "✓" if find.get("link_verified") else "≈"
+            link = x.get("item_url") or x.get("url", "")
+            L.append(f"- {verified} **{x['merchant']}** · {x.get('item','') or x['category']} "
+                     f"— ${x['cost_usd']:.2f} → {int(x['reward_miles']):,} mi "
+                     f"({x['ratio']:.1f}x) — {link}")
+        L += ["", "_✓ = exact product link (click-verified) · ≈ = nearest catalog "
+              "link (confirm the item on the page)._", ""]
+
     L += ["---",
           "_Reminder: verify a qualifying purchase exists AND read the terms "
           "(new-customer-only, one-time, expiry, hold period). Capital One can "
