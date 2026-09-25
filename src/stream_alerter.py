@@ -20,12 +20,20 @@ from pathlib import Path
 
 from confluent_kafka import Consumer
 
+import judge as J
+import pricecheck
 import purchase_gate as G
 import score as S
 import stream_bus as bus
+from autohunt import merchant_url
 
 ROOT = Path(__file__).resolve().parent.parent
 _RUNNING = True
+
+# Price the offer (render the merchant site, find the cheapest item + deep link)
+# before alerting, so the push is actionable — not just "a flat offer appeared".
+# Set POINTS_ALERT_PRICE=0 to fall back to fast lead-only alerts (no rendering).
+_PRICE_IN_ALERT = os.environ.get("POINTS_ALERT_PRICE", "1") != "0"
 
 # Phone push via ntfy.sh (free, no account). Set NTFY_TOPIC in your .env to a
 # unique, hard-to-guess string, then subscribe to it in the ntfy app on your
@@ -49,7 +57,7 @@ def _mac_notify(title: str, body: str) -> None:
         pass  # not on macOS (e.g. a Linux VM) — phone push carries it
 
 
-def _phone_push(title: str, body: str) -> bool:
+def _phone_push(title: str, body: str, click_url: str | None = None) -> bool:
     if not NTFY_TOPIC:
         return False
     ascii_title = title.encode("ascii", "ignore").decode().strip() or "New Capital One offer"
@@ -59,7 +67,8 @@ def _phone_push(title: str, body: str) -> bool:
             data=body.encode("utf-8"), method="POST",
             headers={"Title": ascii_title, "Priority": "high",
                      "Tags": "money_with_wings",
-                     "Click": "https://capitaloneoffers.com/feed"})
+                     # tapping the push opens the exact product (or the feed)
+                     "Click": click_url or "https://capitaloneoffers.com/feed"})
         urllib.request.urlopen(req, timeout=10)
         return True
     except Exception as e:
@@ -67,11 +76,32 @@ def _phone_push(title: str, body: str) -> bool:
         return False
 
 
-def send_alert(title: str, body: str) -> str:
+def send_alert(title: str, body: str, click_url: str | None = None) -> str:
     """Fire the alert on every available channel. Returns which fired."""
     _mac_notify(title, body)
-    pushed = _phone_push(title, body)
+    pushed = _phone_push(title, body, click_url)
     return "phone + mac" if pushed else "mac only (set NTFY_TOPIC for phone push)"
+
+
+def _price_offer(best: dict, urlmap: dict, mv: float) -> dict:
+    """Render the merchant's site (paced + block-safe) and judge the cheapest
+    qualifying item. Returns {priced, item, price, ratio, link, note}."""
+    url = merchant_url(best["domain"], urlmap)
+    rendered = pricecheck.find_prices(url, sort_cheapest=True)
+    if rendered.get("blocked"):
+        return {"priced": False, "link": url, "note": "site blocked pricing"}
+    v = J.judge(best, rendered)
+    price = v.get("price_usd")
+    ok = (price and float(price) > 0 and v.get("plausible")
+          and v.get("likely_qualifies") and v.get("confidence") in ("medium", "high"))
+    if not ok:
+        return {"priced": False, "link": v.get("product_url") or url,
+                "note": v.get("note", "no qualifying price")[:60]}
+    price = float(price)
+    value = best["reward_miles"] * mv
+    return {"priced": True, "item": v.get("item", "item"), "price": price,
+            "ratio": value / price if price else 0,
+            "link": v.get("product_url") or url, "note": ""}
 
 
 def run_alerter() -> None:
@@ -84,11 +114,17 @@ def run_alerter() -> None:
     consumer = Consumer({"bootstrap.servers": bus.BOOTSTRAP,
                         "group.id": bus.ALERTER_GROUP,
                         "auto.offset.reset": "latest",   # only alert on offers from now on
-                        "enable.auto.commit": True})
+                        "enable.auto.commit": True,
+                        # pricing renders pages (slow + paced) between polls; don't
+                        # let Kafka evict us mid-render.
+                        "max.poll.interval.ms": 900000})
     consumer.subscribe([bus.TOPIC_NEW_OFFERS])
+    urlmap_path = ROOT / "config" / "hunt_urls.json"
+    urlmap = json.loads(urlmap_path.read_text()) if urlmap_path.exists() else {}
     channel = f"phone (ntfy:{NTFY_TOPIC}) + mac" if NTFY_TOPIC else "mac only"
+    mode = "price + alert" if _PRICE_IN_ALERT else "lead-only alert"
     print(f"  [alerter {os.getpid()}] listening for NEW flat + single-purchase "
-          f"offers ≥ {bar} mi → {channel}", flush=True)
+          f"offers ≥ {bar} mi → {channel} ({mode})", flush=True)
     try:
         while _RUNNING:
             msg = consumer.poll(1.0)
@@ -111,14 +147,34 @@ def run_alerter() -> None:
                     best = opp
             if not best:
                 continue
+            merchant = o.get("merchant", "?")
             miles = int(best["reward_miles"])
             value = miles * mv
             cat = best["category"]
             buy = "any cheap item" if cat.lower() in ("any purchase", "") else cat
-            title = f"🎯 New flat single-buy — {o.get('merchant','?')}"
-            body = (f"{miles:,} miles (~${value:.0f}) · buy: {buy} · "
-                    f"{o.get('domain','')}")
-            fired = send_alert(title, body)
+            click = None
+
+            if _PRICE_IN_ALERT:
+                # render the merchant site + judge the cheapest item (paced, safe)
+                try:
+                    r = _price_offer(best, urlmap, mv)
+                except Exception as e:
+                    r = {"priced": False, "link": None, "note": f"pricing error: {str(e)[:50]}"}
+                click = r.get("link")
+                if r.get("priced"):
+                    title = f"💰 {merchant} — buy ${r['price']:.2f} → {miles:,} mi ({r['ratio']:.1f}x)"
+                    body = (f"Buy: {r['item'][:70]}\n"
+                            f"${r['price']:.2f} → {miles:,} miles (~${value:.0f}) · {r['ratio']:.1f}x\n"
+                            f"{r['link']}")
+                else:
+                    title = f"🎯 New flat single-buy — {merchant}"
+                    body = (f"{miles:,} miles (~${value:.0f}) · buy: {buy} · {o.get('domain','')}\n"
+                            f"(couldn't auto-price: {r.get('note','')})")
+            else:
+                title = f"🎯 New flat single-buy — {merchant}"
+                body = f"{miles:,} miles (~${value:.0f}) · buy: {buy} · {o.get('domain','')}"
+
+            fired = send_alert(title, body, click)
             print(f"    ALERT [{fired}]: {title} — {body}", flush=True)
     finally:
         consumer.close()
