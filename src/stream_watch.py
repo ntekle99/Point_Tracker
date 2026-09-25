@@ -21,10 +21,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import re
+import os
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
@@ -39,6 +40,9 @@ ROOT = Path(__file__).resolve().parent.parent
 PROFILE_DIR = ROOT / "pw_profile"
 DATA = ROOT / "data"
 SEEN_PATH = DATA / "seen_offers.json"
+# One-shot flag so we push the "session expired" alert ONCE, not on every 60s
+# systemd restart. Cleared the moment a poll succeeds again (re-arms the alert).
+SESSION_ALERT_FLAG = DATA / ".session_alerted"
 FEED_URL = "https://capitaloneoffers.com/feed"
 BASE = "https://capitaloneoffers.com"
 HDRS = {"Accept": "application/json, text/plain, */*",
@@ -86,6 +90,65 @@ def fetch_all_offers(page, feed_url: str) -> list[dict]:
     return offers
 
 
+def _notify_session_dead() -> None:
+    """Push ONE ntfy alert when the Capital One session has lapsed, so a re-login
+    is a minutes-long chore instead of a silent multi-day blackout. De-duped via
+    SESSION_ALERT_FLAG so the 60s systemd restart loop doesn't spam the phone."""
+    if SESSION_ALERT_FLAG.exists():
+        return
+    topic = os.environ.get("NTFY_TOPIC")
+    if topic:
+        server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+        try:
+            req = urllib.request.Request(
+                f"{server}/{topic}",
+                data=b"Capital One session expired on the watcher. "
+                     b"Run ./points login, then copy pw_state.json to the VM.",
+                method="POST",
+                headers={"Title": "Point Tracker session expired",
+                         "Priority": "urgent", "Tags": "warning"})
+            urllib.request.urlopen(req, timeout=10)
+            print("  (pushed session-expired alert)", flush=True)
+        except Exception as e:
+            print(f"  (session-expired push failed: {str(e)[:80]})", flush=True)
+    try:
+        SESSION_ALERT_FLAG.write_text(dt.datetime.now().isoformat())
+    except Exception:
+        pass
+
+
+def _clear_session_alert() -> None:
+    """A poll succeeded — re-arm the expiry alert for next time."""
+    try:
+        SESSION_ALERT_FLAG.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def _open_feed(page, feed_url: dict) -> bool:
+    """Navigate the real feed page (not just the JSON API) and capture the feed
+    token. A genuine navigation each cycle lets Cloudflare reissue its short-lived
+    __cf_bm bot cookie and rotates the feed token — which is what keeps the session
+    alive for days instead of dying with the first 30-min cookie. Returns True if
+    we landed on an authenticated feed, False if bounced to sign-in."""
+    feed_url["v"] = None
+    try:
+        page.goto(FEED_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception:
+        return False
+    for _ in range(30):
+        if feed_url["v"]:
+            break
+        try:
+            page.mouse.wheel(0, 1500)
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return bool(feed_url["v"]) and "signin" not in page.url.lower()
+
+
 def run_watch(interval_min: int, alerters: int, once: bool = False) -> int:
     DATA.mkdir(exist_ok=True)
     seen = set(json.loads(SEEN_PATH.read_text())) if SEEN_PATH.exists() else set()
@@ -109,18 +172,7 @@ def run_watch(interval_min: int, alerters: int, once: bool = False) -> int:
                   "--hide-crash-restore-bubble"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
-        # Inject the portable session so the watcher authenticates on a machine
-        # other than where you logged in (a copied pw_profile can't decrypt cookies
-        # cross-OS). See scrape.load_session_cookies.
-        try:
-            n = scrape.load_session_cookies(ctx)
-            if n:
-                print(f"loaded {n} cookies from portable session", flush=True)
-        except Exception as e:
-            print(f"(cookie import skipped: {e})", flush=True)
-
         feed_url = {"v": None}
-        tok_re = re.compile(r"/feed/([^/?]+)\?")
         def on_response(resp):
             try:
                 if "/feed/" in resp.url and "?" in resp.url and "/offers/" not in resp.url \
@@ -129,31 +181,59 @@ def run_watch(interval_min: int, alerters: int, once: bool = False) -> int:
             except Exception:
                 pass
         page.on("response", on_response)
-        page.goto(FEED_URL, wait_until="domcontentloaded", timeout=60000)
-        for _ in range(30):
-            if feed_url["v"]:
-                break
+
+        # Prefer the LIVE pw_profile: a persistent context rotates cookies back to
+        # disk as the server refreshes them, so the session self-renews and lasts
+        # for days. Only fall back to the frozen pw_state.json snapshot if the
+        # profile has no valid session (e.g. first boot on a fresh VM) — a snapshot
+        # can't self-refresh, so it's a bootstrap, not the steady state.
+        ok = _open_feed(page, feed_url)
+        if not ok:
             try:
-                page.mouse.wheel(0, 1500)
-            except Exception:
-                pass
-            time.sleep(0.5)
-        if "signin" in page.url.lower() or not feed_url["v"]:
+                n = scrape.load_session_cookies(ctx)
+                if n:
+                    print(f"profile session invalid — injected {n} cookies from "
+                          f"portable snapshot", flush=True)
+                    ok = _open_feed(page, feed_url)
+            except Exception as e:
+                print(f"(cookie import skipped: {e})", flush=True)
+        if not ok:
             print("not logged in — run: ./points login", file=sys.stderr)
+            _notify_session_dead()
             ctx.close()
             for p in procs:
                 p.terminate()
             return 2
+        _clear_session_alert()
 
         print(f"👀 watching every {interval_min} min "
               f"({alerters} alerter(s)). Ctrl-C to stop.", flush=True)
         try:
+            established = True   # startup already navigated + captured the token
             while True:
+                # Re-navigate the real feed page each cycle (startup did the first
+                # one) so Cloudflare reissues __cf_bm and the feed token stays fresh.
+                # A bounce to sign-in here means the session finally lapsed.
+                if not established:
+                    if not _open_feed(page, feed_url):
+                        print("session dropped mid-run — run: ./points login",
+                              file=sys.stderr)
+                        _notify_session_dead()
+                        break
+                established = False
+                _clear_session_alert()
+
                 offers = fetch_all_offers(page, feed_url["v"])
                 new = [o for o in offers if _sig(o) not in seen]
                 for o in offers:
                     seen.add(_sig(o))
                 SEEN_PATH.write_text(json.dumps(sorted(seen)))
+                # Persist the refreshed cookies back to the portable snapshot so a
+                # future restart/copy starts from a live session, not a stale one.
+                try:
+                    ctx.storage_state(path=str(scrape.STATE_FILE))
+                except Exception:
+                    pass
                 stamp = dt.datetime.now().strftime("%H:%M")
                 if first_run:
                     print(f"  [{stamp}] baseline: {len(offers)} offers "
