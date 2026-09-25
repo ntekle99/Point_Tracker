@@ -21,3 +21,6 @@ __pycache__/
 # --- os ---
 .DS_Store
 *.log
+
+# portable session (cookies) — never commit
+pw_state.json

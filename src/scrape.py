@@ -44,6 +44,38 @@ ROOT = Path(__file__).resolve().parent.parent   # repo root (src/ is one level d
 PROFILE_DIR = ROOT / "pw_profile"
 DATA_DIR = ROOT / "data"
 FEED_URL = "https://capitaloneoffers.com/feed"
+# Portable session (cookies + storage) exported at login. Unlike the pw_profile
+# directory, this JSON stores cookie VALUES in plaintext, so it survives being
+# copied to another machine/OS — a copied Chromium profile does NOT, because
+# cookies are encrypted with the origin OS keychain (macOS -> can't decrypt on Linux).
+STATE_FILE = ROOT / "pw_state.json"
+
+
+def save_session(ctx) -> None:
+    """Export a portable storage_state (cookies + localStorage) after login."""
+    try:
+        ctx.storage_state(path=str(STATE_FILE))
+        print(f"Portable session saved to {STATE_FILE.name} "
+              f"(copy this to another machine, not pw_profile/).")
+    except Exception as e:
+        print(f"(could not save portable session: {e})")
+
+
+def load_session_cookies(ctx) -> int:
+    """Inject cookies from a portable storage_state file into the context. This is
+    what makes the session work on a different machine than where you logged in.
+    Returns the number of cookies loaded (0 if no file)."""
+    if not STATE_FILE.exists():
+        return 0
+    try:
+        data = json.loads(STATE_FILE.read_text())
+        cookies = data.get("cookies") or []
+        if cookies:
+            ctx.add_cookies(cookies)
+        return len(cookies)
+    except Exception as e:
+        print(f"(portable session import failed: {e})", file=sys.stderr)
+        return 0
 
 # --- Anti-ban rate limiting (be a good citizen; don't get throttled) ---------
 # Very conservative on purpose. Detail calls are cached BY DOMAIN so daily runs
@@ -180,6 +212,13 @@ def run(login_only: bool, headless: bool, url: str) -> int:
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
+        # On a machine other than where you logged in, the copied pw_profile can't
+        # decrypt its cookies — inject the portable session instead.
+        if not login_only:
+            n = load_session_cookies(ctx)
+            if n:
+                print(f"loaded {n} cookies from portable session")
+
         # Capture the feed API JSON (the reliable source of merchant + reward)
         # and the pagination token/cursor so we can page through the WHOLE feed
         # via the same /xhr/feed/<token>/offers/<cursor> endpoint the "View More
@@ -217,8 +256,9 @@ def run(login_only: bool, headless: bool, url: str) -> int:
                 input(">>> Press Enter when you're logged in and see your offers... ")
             except EOFError:
                 print("(no stdin — waiting 90s instead)"); time.sleep(90)
+            save_session(ctx)          # portable — copy this to the VM, not pw_profile/
             ctx.close()
-            print("Session saved to pw_profile/. Next: python3 scrape.py")
+            print("Session saved. Next: python3 scrape.py")
             return 0
 
         # scrape mode

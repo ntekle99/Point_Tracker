@@ -32,6 +32,7 @@ from playwright.sync_api import sync_playwright
 from confluent_kafka import Producer
 
 import parse as P
+import scrape
 import stream_bus as bus
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,6 +108,16 @@ def run_watch(interval_min: int, alerters: int, once: bool = False) -> int:
             args=["--disable-blink-features=AutomationControlled",
                   "--hide-crash-restore-bubble"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+
+        # Inject the portable session so the watcher authenticates on a machine
+        # other than where you logged in (a copied pw_profile can't decrypt cookies
+        # cross-OS). See scrape.load_session_cookies.
+        try:
+            n = scrape.load_session_cookies(ctx)
+            if n:
+                print(f"loaded {n} cookies from portable session", flush=True)
+        except Exception as e:
+            print(f"(cookie import skipped: {e})", flush=True)
 
         feed_url = {"v": None}
         tok_re = re.compile(r"/feed/([^/?]+)\?")
