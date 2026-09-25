@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 Real-time alerter (CONSUMER). Subscribes to `points.new_offers` and fires an
-instant macOS notification the moment a new FLAT offer worth your attention
-appears — so you hear about a Pinter-style deal at 2pm, not tomorrow at 8am.
+instant push the moment a new offer that fits ALL the criteria appears — flat
+reward, single one-time purchase (no subscription / service commitment / spend
+threshold), and above your miles bar. Offers get devalued as they get popular,
+so catching a Pinter/Faire-style deal the hour it lands is the whole point.
 
 Run several as a consumer group; the watcher (`./points watch`) starts them.
     python src/stream_alerter.py
@@ -18,6 +20,7 @@ from pathlib import Path
 
 from confluent_kafka import Consumer
 
+import purchase_gate as G
 import score as S
 import stream_bus as bus
 
@@ -84,8 +87,8 @@ def run_alerter() -> None:
                         "enable.auto.commit": True})
     consumer.subscribe([bus.TOPIC_NEW_OFFERS])
     channel = f"phone (ntfy:{NTFY_TOPIC}) + mac" if NTFY_TOPIC else "mac only"
-    print(f"  [alerter {os.getpid()}] listening for new flat offers ≥ {bar} mi "
-          f"→ {channel}", flush=True)
+    print(f"  [alerter {os.getpid()}] listening for NEW flat + single-purchase "
+          f"offers ≥ {bar} mi → {channel}", flush=True)
     try:
         while _RUNNING:
             msg = consumer.poll(1.0)
@@ -95,13 +98,26 @@ def run_alerter() -> None:
                 o = json.loads(msg.value())
             except Exception:
                 continue
-            miles = int(o.get("reward_miles") or 0)
-            # only flat lump-sum offers are worth a real-time ping
-            if o.get("reward_type") != "flat" or miles < bar:
+            # Apply the FULL criteria: flat earning path (incl. flat tiers) + a
+            # single one-time purchase (drops subs / commitments / spend-thresholds)
+            # + above the miles bar. Pick the best-qualifying path.
+            best = None
+            for opp in S.offer_opportunities(o):
+                if opp["reward_miles"] < bar:
+                    continue
+                if not G.purchase_gate(opp, o)["eligible"]:
+                    continue
+                if best is None or opp["reward_miles"] > best["reward_miles"]:
+                    best = opp
+            if not best:
                 continue
+            miles = int(best["reward_miles"])
             value = miles * mv
-            title = f"🎯 New Capital One flat offer — {o.get('merchant','?')}"
-            body = f"{miles:,} miles (~${value:.0f}) · {o.get('domain','')}"
+            cat = best["category"]
+            buy = "any cheap item" if cat.lower() in ("any purchase", "") else cat
+            title = f"🎯 New flat single-buy — {o.get('merchant','?')}"
+            body = (f"{miles:,} miles (~${value:.0f}) · buy: {buy} · "
+                    f"{o.get('domain','')}")
             fired = send_alert(title, body)
             print(f"    ALERT [{fired}]: {title} — {body}", flush=True)
     finally:
