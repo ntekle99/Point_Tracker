@@ -49,6 +49,11 @@ def _price_job(job):
     opp, url = job
     try:
         rendered = pricecheck.find_prices(url)
+        # A bot-block / rate-limit is NOT "no deal here" — return it as an error so
+        # the merchant is skipped for THIS run but not permanently blacklisted, and
+        # don't waste an LLM call judging a block page.
+        if rendered.get("blocked"):
+            return (opp, url, None, f"blocked/throttled: {rendered.get('note','')}"[:120])
         verdict = J.judge(opp, rendered)
         return (opp, url, verdict, None)
     except Exception as e:

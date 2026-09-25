@@ -3,53 +3,196 @@
 Merchant price-finder: render a JS site in a real browser and extract prices.
 
 This is the linchpin of the autonomous item-finder. Static page-readers (and
-WebFetch) can't see JS-rendered prices (att.com, boost, etc.); a rendered
-browser can. It hits MERCHANT sites only — never Capital One — so there is no
-rate-limit/ban concern here.
+WebFetch) can't see JS-rendered prices (att.com, boost, verizon, etc.); a
+rendered browser can.
+
+SAFETY (this file is deliberately gentle — merchants DO rate-limit/bot-block):
+  • ONE navigation per call. Never reloads, never retries, never "hits refresh".
+  • A process-wide minimum delay is enforced between navigations (with jitter),
+    so back-to-back calls in a hunt can't hammer a site.
+  • If a page returns a bot-block / rate-limit (HTTP 403/418/429 or a known
+    block page), we ABORT immediately with blocked=True and do NOT retry — the
+    caller should stop hitting that merchant.
+  • Stealth headers + masked automation flags reduce the chance of tripping the
+    block in the first place.
+
+CHEAPEST-FINDING:
+  • On catalog/listing pages, if a "Price: low to high" sort control exists we
+    select it ONCE (a normal user interaction, not a reload) so the cheap tail
+    of a 1,000+ item catalog actually surfaces — otherwise a static read only
+    sees the "Featured" page and misses the cheapest item entirely.
+  • Prices are returned ascending, each with its surrounding text and the
+    nearest product deep-link.
 
 Usage:
     python3 pricecheck.py https://www.att.com/prepaid/plans/
-    python3 pricecheck.py https://www.att.com/prepaid/plans/ --json
-
-Outputs the cheapest prices found with the text around them, so a human (or an
-agent step) can pick the cheapest QUALIFYING item. Best-effort: some sites lazy
--load, gate by location, or block bots — those are reported, not faked.
+    python3 pricecheck.py <catalog-url> --referer <affiliate-url> --json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import random
 import re
 import sys
+import time
 
 from playwright.sync_api import sync_playwright
 
 # handle commas: $1,299.99 -> 1299.99 (not 1)
 PRICE_RE = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d{1,4}(?:\.\d{2})?)", re.I)
 
+# ---------------------------------------------------------------------------
+# Process-wide pacing. Enforced BEFORE every navigation so no run — however
+# many opportunities it prices — can fire requests faster than this. Tune with
+# PRICECHECK_MIN_INTERVAL (seconds); default is intentionally conservative.
+# ---------------------------------------------------------------------------
+_MIN_INTERVAL_SEC = float(os.environ.get("PRICECHECK_MIN_INTERVAL", "8"))
+_last_nav_monotonic = 0.0
+
+# Signals that we've been blocked / throttled. On any of these we STOP — we do
+# not retry, because retrying a block is exactly what escalates it to a ban.
+_BLOCK_STATUSES = {403, 418, 429, 503}
+_BLOCK_MARKERS = (
+    "isn't available",
+    "unable to process",
+    "unable to retrieve",
+    "access denied",
+    "request unsuccessful",
+    "pardon our interruption",
+    "are you a human",
+    "verify you are a human",
+    "detected unusual",
+    "temporarily blocked",
+)
+
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || {runtime: {}};
+"""
+
+_EXTRA_HEADERS = {
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,*/*;q=0.8"),
+    "Upgrade-Insecure-Requests": "1",
+    "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+}
+
 
 def _to_float(s: str) -> float:
     return float(s.replace(",", ""))
 
 
-def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless,
-                                     args=["--disable-blink-features=AutomationControlled"])
-        ctx = browser.new_context(
-            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0 Safari/537.36"),
-            viewport={"width": 1280, "height": 900})
-        page = ctx.new_page()
-        info = {"url": url, "prices": [], "ok": False, "note": ""}
+def _pace() -> None:
+    """Block until at least _MIN_INTERVAL_SEC (plus jitter) has passed since the
+    last navigation anywhere in this process. This is the core anti-hammer guard."""
+    global _last_nav_monotonic
+    elapsed = time.monotonic() - _last_nav_monotonic
+    wait = _MIN_INTERVAL_SEC - elapsed
+    if wait > 0:
+        time.sleep(wait + random.uniform(0.4, 1.6))
+    _last_nav_monotonic = time.monotonic()
+
+
+def _looks_blocked(status: int, head_text: str) -> bool:
+    if status in _BLOCK_STATUSES:
+        return True
+    low = head_text.lower()
+    return any(m in low for m in _BLOCK_MARKERS)
+
+
+def _try_sort_low_to_high(page) -> bool:
+    """If a native <select> offers a price-ascending sort, pick it ONCE. This is
+    a user-style interaction (fires one XHR for sorted results), never a reload.
+    Best-effort: any failure is swallowed and we just read the page as-is."""
+    try:
+        for sel in page.query_selector_all("select"):
+            for opt in sel.query_selector_all("option"):
+                label = (opt.inner_text() or "").strip()
+                if "low to high" in label.lower():
+                    val = opt.get_attribute("value")
+                    if val:
+                        sel.select_option(value=val)
+                    else:
+                        sel.select_option(label=label)
+                    page.wait_for_timeout(3500)
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _gentle_scroll(page, steps: int = 5) -> None:
+    """Nudge lazy-loaded tiles into rendering. Scrolling only — no navigation."""
+    for _ in range(steps):
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            page.mouse.wheel(0, 2200)
+            page.wait_for_timeout(800)
+        except Exception:
+            break
+
+
+def find_prices(url: str, headless: bool = True, wait_ms: int = 1500,
+                referer: str | None = None, sort_cheapest: bool = True) -> dict:
+    """Render `url` ONCE and return prices ascending. Never retries.
+
+    referer:       pass the affiliate/landing URL to navigate "in session" (helps
+                   dodge blocks and preserves affiliate cookies).
+    sort_cheapest: on catalog pages, select "Price low to high" before reading.
+
+    Returns {url, prices:[{amount, context, url}], ok, blocked, note}.
+    """
+    info = {"url": url, "prices": [], "ok": False, "blocked": False, "note": ""}
+    _pace()  # <-- enforce the min interval BEFORE we touch the network
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"])
+        ctx = browser.new_context(
+            user_agent=_UA,
+            viewport={"width": 1440, "height": 1000},
+            locale="en-US",
+            extra_http_headers=_EXTRA_HEADERS)
+        ctx.add_init_script(_STEALTH_JS)
+        page = ctx.new_page()
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=30000,
+                             referer=referer)
+            status = resp.status if resp else 0
+
+            # Read a small slice of the body to sniff for block pages.
             try:
-                page.wait_for_load_state("networkidle", timeout=4000)
+                head_text = page.inner_text("body")[:400]
+            except Exception:
+                head_text = ""
+
+            if _looks_blocked(status, head_text):
+                info["blocked"] = True
+                info["note"] = (f"bot-block / rate-limit (HTTP {status}) — "
+                                f"aborting WITHOUT retry; back off this merchant")
+                return info  # <-- critical: no retry, no refresh, just stop
+
+            # let the app settle (Verizon & co never go network-idle; keep short)
+            try:
+                page.wait_for_load_state("networkidle", timeout=3500)
             except Exception:
                 pass
             page.wait_for_timeout(wait_ms)
+
+            _gentle_scroll(page, steps=4)
+            if sort_cheapest:
+                if _try_sort_low_to_high(page):
+                    _gentle_scroll(page, steps=5)  # re-render sorted tiles
+
             # collect price tokens with surrounding text AND the nearest product
             # link, so we can deep-link the exact item (not the homepage).
             items = page.evaluate(r"""
@@ -62,13 +205,10 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
                 while ((n = walk.nextNode())) {
                   const t = (n.textContent || '').trim();
                   if (!t || t.length > 160 || !re.test(t)) continue;
-                  // climb to a small block for context
                   let el = n.parentElement, ctx = t;
                   for (let i=0;i<3 && el;i++){ const c=(el.innerText||'').trim();
                     if (c && c.length<=200){ ctx=c; el=el.parentElement; } else break; }
                   if (seen.has(ctx)) continue; seen.add(ctx);
-                  // nearest product link: a link wrapping the price, else one in
-                  // the surrounding card (skip nav/cart/account/social links).
                   let url = '';
                   const bad = /(cart|account|login|sign[- ]?in|help|support|privacy|terms|facebook|instagram|twitter|tiktok|youtube|#$)/i;
                   let a = n.parentElement ? n.parentElement.closest('a[href]') : null;
@@ -83,7 +223,7 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
                   if (a && a.href && !bad.test(a.href)) url = a.href;
                   out.push({text: ctx.replace(/\s+/g,' '), url});
                 }
-                return out.slice(0, 60);
+                return out.slice(0, 80);
               }
             """)
             prices = []
@@ -92,7 +232,6 @@ def find_prices(url: str, headless: bool = True, wait_ms: int = 1500) -> dict:
                 for m in PRICE_RE.finditer(ctx_txt):
                     prices.append({"amount": _to_float(m.group(1)),
                                    "context": ctx_txt[:140], "url": purl})
-            # dedupe (keep first url) + sort ascending
             uniq = {}
             for p in prices:
                 key = (p["amount"], p["context"])
@@ -113,18 +252,27 @@ def main(argv):
     ap.add_argument("url")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--show", action="store_true", help="run headed (visible)")
+    ap.add_argument("--referer", default=None,
+                    help="affiliate/landing URL to navigate in-session")
+    ap.add_argument("--no-sort", action="store_true",
+                    help="don't select 'Price low to high' on catalog pages")
     args = ap.parse_args(argv)
-    info = find_prices(args.url, headless=not args.show)
+    info = find_prices(args.url, headless=not args.show, referer=args.referer,
+                       sort_cheapest=not args.no_sort)
     if args.json:
         print(json.dumps(info, indent=2))
         return 0
     print(f"URL: {info['url']}")
+    if info.get("blocked"):
+        print(f"  ⛔ {info['note']}")
+        return 2
     if not info["ok"]:
         print(f"  ✗ {info['note']}")
         return 1
-    print(f"  cheapest prices found (ascending):")
+    print("  cheapest prices found (ascending):")
     for p in info["prices"][:12]:
-        print(f"    ${p['amount']:>7.2f}  {p['context']}")
+        link = f"  ->  {p['url']}" if p["url"] else ""
+        print(f"    ${p['amount']:>7.2f}  {p['context']}{link}")
     return 0
 
 

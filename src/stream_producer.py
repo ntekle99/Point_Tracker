@@ -20,6 +20,10 @@ def _render_job(job):
     offer, url = job
     try:
         rendered = pricecheck.find_prices(url)
+        # surface a bot-block / rate-limit as an error so it isn't published as a
+        # (priceless) page to be judged; the merchant is retried on a later run.
+        if rendered.get("blocked"):
+            return (offer, url, None, f"blocked/throttled: {rendered.get('note','')}"[:150])
         return (offer, url, rendered, None)
     except Exception as e:
         return (offer, url, None, str(e)[:150])
