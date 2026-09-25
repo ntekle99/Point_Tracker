@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# doctor — one-stop health check + restart for the continuous watcher.
+#
+# Built to be driven by an on-device agent (e.g. Claude on the phone) OR a human.
+# It never guesses silently: it prints a single VERDICT line and a RECOMMENDED
+# ACTION so whoever runs it knows exactly what to do next.
+#
+#   ./doctor            full diagnosis (default)
+#   ./doctor restart    restart the watcher, then re-diagnose
+#   ./doctor logs       stream the live log (Ctrl-C to stop)
+#   ./doctor heal       restart + diagnose; spells out the fix if it can't self-heal
+#
+# The ONE thing this box cannot fix by itself: a fully-expired Capital One login.
+# Sign-in needs a real screen, so it must be done on the Mac and the fresh
+# pw_state.json copied over (see RUNBOOK.md → "Session expired"). doctor detects
+# that case and says so explicitly instead of restart-looping forever.
+set -uo pipefail
+cd "$(dirname "$0")"
+
+SERVICE="points-watch"
+DATA="$PWD/data"
+LOG="$DATA/watch.log"
+SEEN="$DATA/seen_offers.json"
+STATE="$PWD/pw_state.json"
+POLL_MIN=30                 # matches --interval in the systemd unit
+STALE_MIN=$((POLL_MIN * 2 + 10))   # a poll older than this = something's wrong
+PY="$PWD/.venv/bin/python"
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_rst=$'\033[0m'
+ok(){ echo "  ${c_grn}OK${c_rst}   $*"; }
+warn(){ echo "  ${c_yel}WARN${c_rst} $*"; }
+bad(){ echo "  ${c_red}FAIL${c_rst} $*"; }
+
+age_min(){ # minutes since file $1 was modified; 999999 if missing
+  [ -f "$1" ] || { echo 999999; return; }
+  local m; m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null)
+  echo $(( ( $(date +%s) - m ) / 60 ))
+}
+
+restart(){
+  echo "restarting $SERVICE ..."
+  sudo systemctl restart "$SERVICE" && echo "  restarted; giving it ~80s to log in + poll..."
+  sleep 80
+}
+
+diagnose(){
+  echo "=== Point Tracker watcher — health @ $(date -u '+%Y-%m-%d %H:%M:%SZ') ==="
+  local verdict="HEALTHY" action="none — leave it running."
+
+  # 1. service up?
+  if systemctl is-active --quiet "$SERVICE"; then
+    ok "service active ($(systemctl show -p ActiveEnterTimestamp --value "$SERVICE"))"
+  else
+    bad "service is NOT active"
+    verdict="SERVICE DOWN"; action="./doctor restart"
+  fi
+
+  # 2. broker reachable? (watcher can't publish without it)
+  if (exec 3<>/dev/tcp/127.0.0.1/9092) 2>/dev/null; then
+    ok "Kafka broker reachable on 127.0.0.1:9092"; exec 3>&- 2>/dev/null
+  else
+    bad "Kafka broker unreachable on :9092"
+    verdict="BROKER DOWN"; action="cd $PWD && docker compose up -d   (then ./doctor restart)"
+  fi
+
+  # 3. ntfy configured? (no topic = alerts go nowhere on this headless box)
+  if grep -q '^NTFY_TOPIC=' .env 2>/dev/null; then
+    ok "ntfy topic set — phone push enabled"
+  else
+    warn "NTFY_TOPIC not set in .env — alerts (incl. session-expired) go nowhere"
+  fi
+
+  # 4. is it actually polling? (freshest signal of real health)
+  local sa; sa=$(age_min "$SEEN")
+  if [ "$sa" -lt "$STALE_MIN" ]; then
+    ok "last successful poll ${sa} min ago (seen_offers.json fresh)"
+  elif [ "$sa" -eq 999999 ]; then
+    warn "seen_offers.json missing — never completed a poll yet"
+  else
+    bad "last poll ${sa} min ago (> ${STALE_MIN}m) — polling has stalled"
+    [ "$verdict" = "HEALTHY" ] && { verdict="STALLED"; action="./doctor heal"; }
+  fi
+
+  # 5. session expired? (the case this box can't self-fix)
+  local recent; recent=$(tail -8 "$LOG" 2>/dev/null)
+  if echo "$recent" | grep -q "not logged in"; then
+    bad "recent log shows 'not logged in' — Capital One session has LAPSED"
+    verdict="SESSION EXPIRED"
+    action="Re-login on the Mac and re-copy the session — this box cannot sign in itself:
+           1) on Mac:  cd ~/Desktop/points_tracker && ./points login
+           2) on Mac:  brev copy ./pw_state.json ntekle-openclaw-practice:$PWD/pw_state.json
+           3) here:    ./doctor restart"
+  fi
+
+  # snapshot age (informational — a very old snapshot bootstraps a dead session)
+  local ta; ta=$(age_min "$STATE")
+  [ "$ta" -ne 999999 ] && echo "  info snapshot pw_state.json is $((ta/60))h old" \
+    && [ "$ta" -gt 1200 ] && warn "snapshot > ~20h old; if the live profile ever fails, re-copy a fresh one"
+
+  echo "---"
+  if [ "$verdict" = "HEALTHY" ]; then
+    echo "VERDICT: ${c_grn}${verdict}${c_rst}"
+  else
+    echo "VERDICT: ${c_red}${verdict}${c_rst}"
+  fi
+  echo "RECOMMENDED ACTION: ${action}"
+  echo "---"
+  echo "last 6 log lines:"
+  tail -6 "$LOG" 2>/dev/null | sed 's/^/  | /'
+}
+
+case "${1:-status}" in
+  status|"") diagnose ;;
+  restart)   restart; diagnose ;;
+  heal)      restart; diagnose ;;
+  logs)      tail -f "$LOG" ;;
+  *) echo "usage: ./doctor [status|restart|logs|heal]"; exit 2 ;;
+esac
