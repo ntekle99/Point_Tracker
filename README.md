@@ -184,14 +184,30 @@ macOS notification is skipped automatically and the phone push carries it.
 Run the watcher continuously on a small always-on box so alerts reach your phone
 even with your laptop closed:
 
+Run each line separately (avoid pasting comment lines into an interactive shell —
+zsh treats `#` as a command, not a comment):
+
 ```bash
 git clone https://github.com/ntekle99/Point_Tracker.git && cd Point_Tracker
+```
+```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+```bash
 .venv/bin/playwright install chromium && sudo .venv/bin/playwright install-deps chromium
-docker compose up -d                        # Kafka (restarts on reboot)
-printf 'MODEL_API_KEY=...\nNTFY_TOPIC=...\n' > .env
-# install the watcher as a systemd service (starts on boot, auto-restarts):
+```
+```bash
+docker compose up -d
+```
+Create `.env` with your real values (this appends, so it won't clobber an existing key):
+```bash
+printf 'MODEL_API_KEY=YOUR_KEY\nNTFY_TOPIC=points-you-random\n' >> .env
+```
+Install the watcher as a systemd service (starts on boot, auto-restarts):
+```bash
 sudo cp deploy/points-watch.service /etc/systemd/system/
+```
+```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now points-watch
 ```
 
