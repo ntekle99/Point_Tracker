@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launch agent: run the continuous watcher 24/7 on the Mac (residential-IP
+  FALLBACK for the Brev VM). Login + watcher on the same box = no session copying
+  and a home IP Cloudflare trusts.
+
+  Install (only when flipping off the VM):
+    # 1. stop the VM watcher first, or both push to the same ntfy topic (dupes):
+    ssh openclaw "sudo systemctl stop points-watch"
+    # 2. load on the Mac:
+    cp deploy/points-watch.mac.plist ~/Library/LaunchAgents/com.pointstracker.watch.plist
+    launchctl load ~/Library/LaunchAgents/com.pointstracker.watch.plist
+    # check:  ./doctor        (works on the Mac too)  /  tail -f data/watch.log
+
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.pointstracker.watch.plist
+
+  Requires Docker Desktop running (the wrapper does `docker compose up -d`).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pointstracker.watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ntekle/Desktop/points_tracker/deploy/mac-watch.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ntekle/Desktop/points_tracker</string>
+
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ntekle/Desktop/points_tracker/data/watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ntekle/Desktop/points_tracker/data/watch.log</string>
+</dict>
+</plist>
