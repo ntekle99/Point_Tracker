@@ -60,6 +60,20 @@ def purchase_gate(opp: dict, offer: dict) -> dict:
     eligible=True, ambiguous=True  -> keep but confirm with an LLM (no marker hit,
                                        but the category is specific so we're unsure).
     """
+    # A stated minimum spend ("Spend $25, earn 500 miles") means this is NOT a
+    # cheap single-item purchase — you must hit the threshold. Disqualify it from
+    # the single-purchase list regardless of category.
+    min_spend = offer.get("min_spend_usd")
+    if not min_spend:  # fallback for offers scraped before min_spend capture
+        sm = re.search(r"spend\s*\$?\s*([0-9][0-9,]*)", offer.get("reward_text_raw", "") or "", re.I)
+        min_spend = float(sm.group(1).replace(",", "")) if sm else None
+    try:
+        if min_spend and float(min_spend) > 0:
+            return {"eligible": False, "ambiguous": False,
+                    "reason": f"requires minimum spend ${float(min_spend):.0f} — not a single cheap buy"}
+    except (TypeError, ValueError):
+        pass
+
     category = (opp.get("category", "") or "").strip().lower()
     if category in _GENERIC_CATEGORIES:
         return {"eligible": True, "ambiguous": False,

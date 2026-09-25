@@ -170,13 +170,19 @@ def parse_feed_item(item: dict) -> dict | None:
     # tiles with no parseable reward (hero banners: "Shop Now", "Explore ...")
     if rtype == "flat" and miles <= 0:
         return None
+    # Capture a minimum-spend threshold stated in the reward headline itself, e.g.
+    # "Spend $25, earn 500 miles". These are NOT flat any-amount rewards — you must
+    # spend the threshold, so the true cost floor is that spend (a 500-mi/$25 offer
+    # is ~0.2x, a loss). Recording it keeps them out of "cheap single purchase".
+    sm = re.search(r"spend\s*\$?\s*([0-9][0-9,]*)", button, re.I)
+    min_spend = float(sm.group(1).replace(",", "")) if sm else None
     return {
         "id": item.get("id", ""),
         "merchant": name,
         "domain": tld,
         "reward_type": rtype,
         "reward_miles": miles,
-        "min_spend_usd": None,           # not in feed; from detail if needed
+        "min_spend_usd": min_spend,      # from the reward headline ("Spend $X…")
         "url": f"https://{tld}" if tld else "",
         "terms": text,
         "reward_text_raw": button,
