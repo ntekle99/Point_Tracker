@@ -57,18 +57,27 @@ case "$cmd" in
     cat <<'EOF'
 points — Capital One Venture X deal hunter
 
+Flat offers get devalued and pulled fast, so the PRIMARY mode is real-time:
+watch the feed continuously and get pushed the moment a new flat deal lands.
+
 usage: ./points <command>
 
-  login    sign into Capital One once (saves your session)
+  REAL-TIME (recommended) — needs a broker: docker compose up -d
+  watch    ⭐ continuous poll -> instant phone/desktop alert on new flat deals
+  stream2  two-stage Kafka: feed -> flat+single-purchase filter -> price -> rate
+  stream   decoupled render (producer) -> LLM judges (consumers) via Kafka
+
+  ON-DEMAND (batch, for a one-off sweep)
   scan     scrape all offers + score, no pricing (fast)
   hunt     price opportunities via render + LLM (ProcessPool)
-  stream   same, but decoupled via Kafka producer/consumer (needs: docker compose up -d)
-  stream2  two-stage Kafka: feed -> flat+single-purchase filter -> price -> rate (needs: docker compose up -d)
-  watch    continuous poll -> real-time alert on new flat offers (needs: docker compose up -d)
-  run      full daily pipeline: scrape -> hunt -> report + macOS notification
-  report   print today's report
+  run      full one-shot pipeline: scrape -> hunt -> report + notification
+  report   print the latest report
 
-Setup: echo "MODEL_API_KEY=your-key" > .env
+  SETUP
+  login    sign into Capital One once (saves your session)
+
+Setup: echo "MODEL_API_KEY=your-key" > .env  (add NTFY_TOPIC for phone push)
+Ops:   ./doctor  (health check + restart)   ·   RUNBOOK.md
 Card:  Venture X only (for now).
 EOF
     ;;

@@ -1,6 +1,12 @@
-# Daily run playbook (for the agent)
+# Batch-mode playbook (for the agent)
 
-When the user says **"check points deals"** (or similar), do this:
+> **The primary mode is real-time streaming, not this batch sweep.** Flat offers get
+> devalued and pulled fast, so the tool is meant to run `./points watch` continuously
+> and push new flat deals the moment they land (see the README → *Streaming architecture*
+> and `RUNBOOK.md`). Use this manual playbook only for a one-off, on-demand sweep when a
+> live watcher isn't running.
+
+When the user asks for a one-off **"check points deals"**, do this:
 
 ## 1. Scrape the portal (Claude-in-Chrome)
 1. Confirm Chrome is open and the user is logged into Capital One.

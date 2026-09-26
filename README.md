@@ -1,28 +1,34 @@
 # Point Tracker
 
-**An autonomous agent that finds arbitrage in Capital One credit-card reward offers** — where a flat miles bonus is worth more than the cheapest qualifying purchase — and ranks the finds by return on your time.
+**A real-time agent that catches arbitrage in Capital One reward offers the hour it lands** — where a flat miles bonus is worth more than the cheapest qualifying purchase — and pushes it to your phone before it's gone.
 
-Some Capital One Offers pay a **flat** miles bonus (e.g. *"7,000 miles for shopping at X"*) regardless of how much you spend. If a merchant sells a cheap in-stock item, the miles can be worth far more than the item costs. This tool hunts those out of **1,000+ daily offers**, prices each merchant live, and tells you exactly what to buy.
+Some Capital One Offers pay a **flat** miles bonus (e.g. *"7,000 miles for shopping at X"*) regardless of how much you spend. If a merchant sells a cheap in-stock item, the miles can be worth far more than the item costs. **But the best flat offers get devalued and pulled fast** — a 10,500-mile deal is worth catching the hour it appears, not in tomorrow's digest. So this tool's primary mode is a **continuous streaming watcher** that diffs the feed every few minutes and fires an **instant push** the moment a new flat, single-purchase deal shows up. A one-shot batch mode is included for on-demand sweeps.
 
 ---
 
-## What it does
+## What it does (real-time)
 
 ```
-scrape ─▶ expand tiers ─▶ render each merchant ─▶ LLM judge ─▶ score ─▶ report
+watch feed  ─▶  diff for NEW offers  ─▶  flat + single-purchase gate  ─▶  price it  ─▶  🔔 instant push
+   (Kafka points.new_offers ─────────────────▶ alerter consumer ─────────────────────────────▶ your phone)
 ```
 
-1. **Scrape** every offer from Capital One's feed API (authenticated, paginated, rate-limited, cached).
-2. **Expand tiers** — a *"Up to 11,200 miles"* offer is really a menu; flat sub-tiers (e.g. *"Prepaid → 7,800 miles"*) are where the cheap plays hide.
-3. **Render** each candidate merchant's live site with a headless browser (many sites render prices in JavaScript that static scrapers can't see).
-4. **Judge** — an LLM reads the rendered prices and picks the *cheapest qualifying* purchase, classifies the friction (one-time buy / cancelable sub / service commitment), estimates effort, and returns a plausibility check.
-5. **Score** — ranks every deal by **net points per minute of effort** against a configurable hourly-rate bar, separates verified deals from LLM guesses, and quarantines implausible reads.
-6. **Report** — a ranked markdown report + macOS notification, with a 🏆 top pick, exact product links, and a ⚠️ "catch" column (new-customer rules, hold periods, "needs a spare phone", etc.).
+1. **Watch** — one logged-in session stays open and re-polls the feed API every N minutes (paced, gentle), diffing against everything already seen.
+2. **Detect new** — only *newly-appeared* offers are published to Kafka (`points.new_offers`); the rest are ignored, so you're alerted once, fast.
+3. **Gate** — the alerter keeps only offers earnable by a **single one-time purchase** with a **flat** reward above your miles bar (drops multipliers, spend-thresholds, subscriptions/service commitments).
+4. **Price inline** — it renders the merchant's live site, finds the cheapest qualifying item + a deep link, and computes the ratio.
+5. **Push** — an instant **phone (ntfy) + desktop** alert: `💰 Pinter — buy $12 → 10,500 mi (8.7x)`, tappable straight to the product. Offers get devalued as they get popular, so speed is the whole point.
 
-Runs itself daily via a macOS launch agent.
+The streaming stages run on **Kafka** so detection, pricing, and alerting scale and fail independently. It runs 24/7 as a service and self-heals via [`./doctor`](#operations--self-healing-doctor).
+
+### On-demand batch (secondary)
+
+For a one-off sweep instead of a live watch: `scrape ─▶ expand tiers ─▶ render each merchant ─▶ LLM judge ─▶ score ─▶ report` — ranks every current flat opportunity by **net points per minute**, with a 🏆 top pick, exact product links, and a ⚠️ "catch" column (new-customer rules, hold periods, "needs a spare phone"). See [On-demand batch mode](#on-demand-batch-mode).
 
 ## Highlights
 
+- **Real-time streaming detection** — a Kafka-backed watcher diffs the feed continuously and pushes a priced deal to your phone the moment it lands, because the best flat offers get devalued and pulled within hours.
+- **Self-healing 24/7 deploy** — a self-refreshing browser session lasts for days, a one-command `./doctor` diagnoses/restarts, and it pushes a "session expired" alert instead of failing silently.
 - **Reliable data via the private feed API** — reverse-engineered pagination + per-offer detail endpoints instead of brittle DOM scraping.
 - **JS-rendering price finder** — a headless-browser step reads prices that `requests`/WebFetch can't.
 - **LLM-in-the-loop with guardrails** — plausibility gating, a confidence floor, a deterministic max-ratio backstop, category-to-product matching, and a hand-verified-vs-auto split. (The judge is genuinely useful *and* genuinely fallible; the tool is designed around that.)
@@ -32,7 +38,7 @@ Runs itself daily via a macOS launch agent.
 
 ## Tech stack
 
-Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-compatible LLM API (runs on any endpoint — configured here for an internal inference hub) · macOS `launchd`.
+Python · [Apache Kafka](https://kafka.apache.org) (KRaft, single-node via Docker) for the streaming pipeline · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-compatible LLM API (runs on any endpoint — configured here for an internal inference hub) · [ntfy](https://ntfy.sh) push · `systemd` / macOS `launchd`.
 
 ---
 
@@ -40,7 +46,9 @@ Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-com
 
 ```
 .
-├── points                      # single CLI entry point (login/scan/hunt/stream/watch/run)
+├── points                      # single CLI entry point (watch/stream2/stream · scan/hunt/run)
+├── doctor                      # health check + restart for the 24/7 watcher (agent-friendly)
+├── RUNBOOK.md                  # operations guide (failure modes → fix)
 ├── requirements.txt
 ├── docker-compose.yml          # single-node Kafka (KRaft) for streaming mode
 ├── config/
@@ -53,33 +61,49 @@ Python · [Playwright](https://playwright.dev) (headless Chromium) · OpenAI-com
 │   ├── judge.py                #   LLM: cheapest qualifying purchase + plausibility + effort
 │   ├── score.py                #   ranking (net pts/min), buckets, report rendering
 │   ├── autohunt.py             #   orchestrator (parallel render → judge → score)
-│   └── stream_*.py             #   Kafka: producer, consumers, watcher, alerter, bus
+│   ├── stream_watch.py         #   ⭐ continuous watcher → publishes NEW offers (real-time)
+│   ├── stream_alerter.py       #   ⭐ prices new flat deals + instant phone/desktop push
+│   └── stream_*.py             #   rest of the Kafka pipeline: producer, classifier, pricer, bus
 ├── scripts/
 │   ├── clean_auto.py           # maintenance: drop auto finds to re-validate
 │   └── vm_selfcheck.py         # deployment self-check (ntfy + kafka)
 ├── deploy/
-│   ├── points-tracker.plist    # macOS launch agent (daily run)
-│   └── points-watch.service    # systemd unit (24/7 watcher on a Linux VM)
+│   ├── points-watch.service    # systemd unit — 24/7 watcher on a Linux VM
+│   ├── points-watch.mac.plist  # launch agent — 24/7 watcher on the Mac (residential IP)
+│   ├── mac-watch.sh            #   wrapper the Mac launch agent runs (broker + watcher)
+│   └── points-tracker.plist    # launch agent — on-demand daily batch run
 └── docs/
-    └── RUN.md                  # per-run playbook
+    └── RUN.md                  # batch-mode playbook
 ```
 
-## Usage
+## Quick start — real-time watch (primary)
 
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium
-echo "MODEL_API_KEY=your-llm-api-key" > .env   # any OpenAI-compatible endpoint
+printf 'MODEL_API_KEY=your-llm-api-key\nNTFY_TOPIC=points-you-random\n' > .env
 
-# ./points is the CLI — one command, several subcommands:
-./points login                # one-time: sign into Capital One (session saved locally)
+./points login                # one-time: sign into Capital One (session saved)
+docker compose up -d          # single-node Kafka (KRaft), localhost:9092
+./points watch --interval 30 --alerters 1   # ⭐ live watch → instant push on new flat deals
+```
+
+That's the whole thing: `watch` polls the feed, and the moment a new flat single-purchase
+deal appears you get a phone + desktop push. Leave it running (or [deploy it 24/7](#deploy-247)).
+Add `NTFY_TOPIC` for phone alerts — see [Phone alerts](#phone-alerts-ntfy).
+
+## On-demand batch mode
+
+For a one-off sweep of everything live *right now* instead of a continuous watch:
+
+```bash
 ./points scan                 # scrape offers + score (fast, no pricing)
 ./points hunt --workers 6     # price opportunities (render + LLM)
-./points run                  # full pipeline: scrape → hunt → report + notify
+./points run                  # full one-shot pipeline: scrape → hunt → report + notify
 ./points report               # print the latest report
 ```
 
-Schedule the daily run by editing the paths in `deploy/points-tracker.plist`, then:
+Schedule a daily batch by editing the paths in `deploy/points-tracker.plist`, then:
 ```bash
 cp deploy/points-tracker.plist ~/Library/LaunchAgents/ && \
 launchctl load ~/Library/LaunchAgents/points-tracker.plist
@@ -96,37 +120,44 @@ pts_per_min  = net_points ÷ estimated_effort_minutes
 
 and flags a deal as worth-it when `pts_per_min` clears your bar (default **200/min ≈ $120/hr** in miles value, tunable in `config.yaml`). Deals are split into **clean** (buy & keep / cancelable), **service commitments** (fiber/TV/contract), and a **verify** bucket for implausibly-high auto reads.
 
-## Streaming mode (Kafka)
+## Streaming architecture (Kafka)
 
-Two Kafka-backed pipelines decouple the stages so rendering, LLM analysis, and
-alerting scale and fail independently. Start a broker first:
+Everything runs on Kafka so detection, pricing, and alerting scale and fail
+independently. Start a broker first:
 
 ```bash
 docker compose up -d          # single-node Kafka (KRaft), localhost:9092
 ```
 
-**Decoupled pricing** — producer renders pages in parallel and publishes each to
-`points.pages`; a consumer group of LLM judges reads them and emits verdicts to
-`points.verdicts`; a collector applies the guardrails and writes the report:
-
-```bash
-./points stream --consumers 4 --render-workers 6
-```
-
-**Continuous + real-time alerts** — a watcher keeps one logged-in session open,
-re-polls the feed every N minutes, and publishes only *newly-appeared* offers to
-`points.new_offers`; an alerter consumer fires an instant macOS notification the
-moment a new flat deal shows up:
+**⭐ Continuous watch + real-time alerts (the primary mode)** — a watcher keeps one
+logged-in session open, re-polls the feed every N minutes, and publishes only
+*newly-appeared* offers to `points.new_offers`; an alerter consumer prices each and
+fires an instant phone + desktop push the moment a new flat single-purchase deal
+lands. This is what catches deals before they're devalued:
 
 ```bash
 ./points watch --interval 30 --alerters 1
 ```
 
 ```
-                       ┌── judge consumers ──▶ points.verdicts ──▶ collector ──▶ report
- producer ▶ points.pages
-                       
- watcher  ▶ points.new_offers ──▶ alerter consumer ──▶ 🔔 notification
+ watcher ▶ points.new_offers ──▶ alerter consumer ──▶ price inline ──▶ 🔔 phone + desktop push
+```
+
+The watcher prefers a **self-refreshing live browser profile** (it re-navigates the
+feed each cycle and writes rotated cookies back), so an authenticated session lasts
+for days; when the bank finally forces a re-login it pushes a one-time "session
+expired" alert instead of failing silently.
+
+**Decoupled pricing (batch, parallel)** — producer renders pages in parallel and
+publishes each to `points.pages`; a consumer group of LLM judges reads them and emits
+verdicts to `points.verdicts`; a collector applies the guardrails and writes the report:
+
+```bash
+./points stream --consumers 4 --render-workers 6
+```
+
+```
+ producer ▶ points.pages ──▶ judge consumers ──▶ points.verdicts ──▶ collector ──▶ report
 ```
 
 **Two-stage pipeline (chained queues)** — separates *finding flat, single-purchase
@@ -174,7 +205,7 @@ Now every new flat deal pushes to your phone (`🎯 New Capital One flat offer �
 Pinter · 10,500 miles`), tappable straight to the offers feed. On a Linux VM the
 macOS notification is skipped automatically and the phone push carries it.
 
-### Deploy 24/7 (Linux VM)
+### Deploy 24/7
 
 Run the watcher continuously on a small always-on box so alerts reach your phone
 even with your laptop closed:
@@ -206,6 +237,40 @@ sudo cp deploy/points-watch.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now points-watch
 ```
 
-`journalctl -u points-watch -f` to follow it. The Capital One session is refreshed
-periodically from a trusted machine (`./points login` → copy `pw_profile/`), since
-a bank login can't be fully automated.
+`journalctl -u points-watch -f` to follow it (or `tail -f data/watch.log`).
+
+> **Datacenter-IP note:** a cloud VM's IP has low reputation with the portal's bot
+> protection (Cloudflare), so the session can be challenged more aggressively there.
+> A **residential-IP machine** (your own Mac) is the most reliable host — the same
+> watcher runs via a launch agent (`deploy/points-watch.mac.plist`), with login and
+> watcher on one box so there's no session copying at all.
+
+**Refreshing the session** (needed when the bank forces a re-login — you'll get a
+push): sign-in needs a real screen, so it can't happen on a headless VM. Re-login on
+a machine with a display and copy the **portable session** across (a copied browser
+profile can't decrypt cookies cross-OS — copy `pw_state.json`, not `pw_profile/`):
+
+```bash
+./points login                         # on a machine with a screen
+scp pw_state.json  user@vm:/path/Point_Tracker/pw_state.json
+```
+Then restart the watcher on the box (`./doctor restart`).
+
+## Operations & self-healing (doctor)
+
+For an always-on deployment, `./doctor` is a single self-diagnosing entry point —
+built so a phone-driven agent (or you) can keep it healthy without remembering the
+internals:
+
+```bash
+./doctor            # health check → one VERDICT + RECOMMENDED ACTION
+./doctor restart    # restart the service, then re-diagnose
+./doctor heal       # restart + diagnose + print the fix if it can't self-heal
+./doctor logs       # live log stream
+```
+
+It checks the service, the Kafka broker, ntfy config, poll freshness, and session
+validity, then prints a clear verdict. It distinguishes what the box **can** self-heal
+(down service/broker, stalled poll → restart) from the one thing it **can't** — an
+expired login, which it flags with the exact re-login steps rather than crash-looping.
+See **[RUNBOOK.md](RUNBOOK.md)** for the full operations guide.
